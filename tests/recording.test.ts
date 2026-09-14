@@ -86,7 +86,7 @@ test('format fallback and unsupported capture are handled without entering a dem
   assert.equal(f.ui.el('demo-record').disabled,true);assert.match(f.ui.el('demo-error').textContent,/未提供分頁錄影/);
 });
 
-test('demonstration scoring never writes the personal best',t=>{
+test('demonstrations and free play never write the personal best; free play reports all service objectives',t=>{
   const f=setup(t);let writes=0;
   const old=Object.getOwnPropertyDescriptor(globalThis,'localStorage');
   Object.defineProperty(globalThis,'localStorage',{value:{getItem:()=>null,setItem:()=>writes++},configurable:true});
@@ -95,5 +95,10 @@ test('demonstration scoring never writes the personal best',t=>{
   const stats={...newStats(),completed:true,delivered:10,picked:10,remaining:30};
   UI.prototype.results.call(f.ui,stats,8521986,'finished',true);assert.equal(writes,0);
   assert.match(f.ui.el('result-subtitle').textContent,/自動駕駛示範/);
+  UI.prototype.results.call(f.ui,stats,123,'finished',false,'free');assert.equal(writes,0);
+  assert.equal(f.ui.el('grade').textContent,'✓');assert.equal(f.ui.el('result-title').textContent,'全部接送完成！');
+  assert.doesNotMatch(f.ui.el('result-stats').innerHTML,/超速|駕駛分|衝紅燈/);
+  UI.prototype.results.call(f.ui,{...stats,missed:1},123,'finished',false,'free');assert.equal(writes,0);
+  assert.equal(f.ui.el('grade').textContent,'✕');assert.match(f.ui.el('result-title').textContent,/接送未完成/);
   UI.prototype.results.call(f.ui,stats,123,'finished');assert.equal(writes,1);
 });

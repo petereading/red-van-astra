@@ -1,19 +1,22 @@
 import * as T from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import type RAPIER from '@dimforge/rapier3d-compat';
-import { CAPACITY,CUMULATIVE,LENGTHS,RUN_SECONDS,STREETS,TOTAL_LENGTH,angleDiff,clamp,createTrip,newStats,onRoute,projectRoute,random,isStoppedAt,scoreRun,type Controls,type DriveState,type Stop,type Trip,type Stats } from './core';
+import { CAPACITY,CUMULATIVE,LENGTHS,RUN_SECONDS,STREETS,TOTAL_LENGTH,angleDiff,clamp,createTrip,newStats,onRoute,projectRoute,random,isStoppedAt,scoreRun,doorPosition,STOP_SPEED,type GameMode,type Controls,type DriveState,type Stop,type Trip,type Stats } from './core';
 import { City,makePerson,animatePerson,makeStop,makeVehicle,disposeModel,type PersonModel,type VehicleModel } from './visuals';
 import { Physics,type HitTarget } from './physics';
 import { GameAudio } from './audio';
 import { UI } from './ui';
 import { DemoRecorder,DEMO_SEED } from './demo';
+import { makeSignals,updateSignals,moveTraffic,trafficPoint,type Signal } from './traffic';
 
-type Traffic={s:number;speed:number;direction:number;lane:number;model:VehicleModel;body:RAPIER.RigidBody;hitUntil:number};
-type Pedestrian={s:number;lateral:number;offset?:number;person:PersonModel;body:RAPIER.RigidBody;hit:boolean;cross:boolean;phase:number};
-type RiderVisual={person:PersonModel;from:T.Vector3;to:T.Vector3;moving:number;out:boolean};
+type Traffic={s:number;speed:number;direction:number;lane:number;model:VehicleModel;body:RAPIER.RigidBody;hitUntil:number;halfLength:number;velocity:number;wrapped:boolean};
+type Pedestrian={s:number;lateral:number;offset?:number;person:PersonModel;body:RAPIER.RigidBody;hit:boolean;cross:boolean;phase:number;crossing?:number;dodge?:Dodge};
+type RiderVisual={person:PersonModel;from:T.Vector3;to:T.Vector3;moving:number;out:boolean;dodge?:Dodge};
+type Dodge={at:number;from:T.Vector3;to:T.Vector3};
 export class Game {
   ui=new UI();audio=new GameAudio();scene=new T.Scene();camera=new T.PerspectiveCamera(55,innerWidth/innerHeight,.1,470);
-  renderer:T.WebGLRenderer;city!:City;physics!:Physics;van=makeVehicle('minibus');trip:Trip=createTrip(1986);stats:Stats=newStats();
-  state:DriveState={x:-7,z:32,speed:0,heading:0};health=100;mode='menu';
+  renderer:T.WebGLRenderer;city!:City;physics!:Physics;van!:VehicleModel;trip:Trip=createTrip(1986);stats:Stats=newStats();
+  state:DriveState={x:-7,z:32,speed:0,heading:0};health=100;mode='menu';gameMode:GameMode='challenge';signals:Signal[]=[];brakeSince=0;brakePeak=0;wasBraking=false;reverseReady=false;brakeJolt=0;
   doorOpen=false;doorAmount=0;unsafeDoor=false;serviceClock=0;terminalOpened=false;
   stopModels:ReturnType<typeof makeStop>[]=[];traffic:Traffic[]=[];pedestrians:Pedestrian[]=[];riderVisuals:RiderVisual[]=[];
   riderBodies:RAPIER.RigidBody[]=[];riderHit=new Set<number>();
@@ -23,19 +26,20 @@ export class Game {
   qa=import.meta.env.DEV&&new URLSearchParams(location.search).get('qa')==='1';autopilot=false;pilotStop=-1;pilotServed=new Set<number>();qaSpeed=1;qaTraffic=true;fps=60;fpsTime=0;frames=0;
   sun:T.DirectionalLight;demoRun=false;demoRecorder?:DemoRecorder;
   constructor(){
-    this.renderer=new T.WebGLRenderer({antialias:true,powerPreference:'high-performance'});this.renderer.outputColorSpace=T.SRGBColorSpace;this.renderer.toneMapping=T.ACESFilmicToneMapping;this.renderer.toneMappingExposure=1.35;
-    this.renderer.setClearColor('#8faaa8');this.renderer.shadowMap.enabled=true;this.renderer.shadowMap.type=T.PCFSoftShadowMap;
-    this.ui.el('viewport').append(this.renderer.domElement);this.scene.fog=new T.Fog('#91aaa7',95,320);
-    this.scene.add(new T.HemisphereLight('#d7e4db','#536956',2.2));
-    this.sun=new T.DirectionalLight('#ffd5a2',2.3);this.sun.position.set(-40,85,35);this.sun.castShadow=true;this.sun.shadow.mapSize.set(1024,1024);this.sun.shadow.camera.left=-35;this.sun.shadow.camera.right=35;this.sun.shadow.camera.top=35;this.sun.shadow.camera.bottom=-35;this.sun.shadow.camera.far=190;this.sun.shadow.bias=-.001;this.scene.add(this.sun);this.scene.add(this.sun.target);
-    this.scene.add(this.van.group);
+    this.renderer=new T.WebGLRenderer({antialias:true,powerPreference:'high-performance'});this.renderer.outputColorSpace=T.SRGBColorSpace;this.renderer.toneMapping=T.ACESFilmicToneMapping;this.renderer.toneMappingExposure=1.1;
+    const generator=new T.PMREMGenerator(this.renderer),room=new RoomEnvironment();this.scene.environment=generator.fromScene(room,.04).texture;room.dispose();generator.dispose();this.scene.environmentIntensity=.6;
+    this.renderer.setClearColor('#c9d7d8');this.renderer.shadowMap.enabled=true;this.renderer.shadowMap.type=T.PCFSoftShadowMap;
+    this.ui.el('viewport').append(this.renderer.domElement);this.scene.fog=new T.Fog('#c5d2ce',140,385);
+    this.scene.add(new T.HemisphereLight('#d5e4f2','#78674e',1.75));
+    this.sun=new T.DirectionalLight('#ffe0ad',3.2);this.sun.position.set(-40,85,35);this.sun.castShadow=true;this.sun.shadow.mapSize.set(1536,1536);this.sun.shadow.camera.left=-35;this.sun.shadow.camera.right=35;this.sun.shadow.camera.top=35;this.sun.shadow.camera.bottom=-35;this.sun.shadow.camera.far=190;this.sun.shadow.bias=-.001;this.scene.add(this.sun);this.scene.add(this.sun.target);
     const smokeMat=new T.MeshBasicMaterial({color:'#455656',transparent:true,opacity:.25,depthWrite:false});this.smoke=new T.InstancedMesh(new T.SphereGeometry(1,7,5),smokeMat,12);this.smoke.visible=false;this.scene.add(this.smoke);
     this.demoRecorder=new DemoRecorder(this.ui,this.audio,{start:()=>this.start(DEMO_SEED,true),stop:()=>{if(this.mode!=='results')this.menu();}});
     this.bind();this.resize();this.applySettings();this.ui.setMode('menu');
   }
   async init(){
-    await document.fonts.load('700 24px "Noto Sans TC"','金記茶餐廳旺角電器新發大藥房裕華辦館好運冰室永興五金香港鮮果大眾車行深水埗公共小型巴士北河街福華長沙灣道界限汝州荔枝角當茶藥飯');
+    await document.fonts.load('700 24px "Noto Sans TC"','金記茶餐廳旺角電器新發大藥房裕華辦館好運冰室永興五金香港鮮果大眾車行深水埗公共小型巴士北河街福華長沙灣道界限汝州荔枝角當茶藥飯美華理髮陳記燒臘嘉樂餅家聯發布行南洋咖啡銀河唱片春雨花店信和押明記麵家晨光攝影華昌鐘錶海記海味成記鎖匙利達文具樂聲琴行萬通找換請勿急煞');
     await document.fonts.ready;
+    this.van=makeVehicle('minibus');this.scene.add(this.van.group);
     this.city=new City();this.scene.add(this.city.group);await Physics.init();this.physics=new Physics(this.city.obstacles);
     for(let s=45;s<TOTAL_LENGTH-25;s+=45)this.checks.push(s);
     for(const s of CUMULATIVE.slice(1,-1))this.checks.push(s);this.checks.sort((a,b)=>a-b);
@@ -44,18 +48,18 @@ export class Game {
   bind(){
     this.ui.onStart=()=>void this.start();this.ui.onResume=()=>void this.resume();this.ui.onPause=()=>this.pause();this.ui.onMenu=()=>{if(this.demoRecorder?.busy)this.demoRecorder.stop('示範已停止；影片保留已錄下的部分。');else this.menu();};this.ui.onDoor=()=>{if(!this.demoRecorder?.busy)this.toggleDoor();};this.ui.onSettings=()=>this.applySettings();
     addEventListener('resize',()=>this.resize());
-    addEventListener('keydown',e=>{if((e.target as HTMLElement).matches('input,select'))return;if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key))e.preventDefault();const key=e.key.toLowerCase();if(this.demoRecorder?.busy&&key!=='escape')return;this.keys.add(key);if(e.repeat)return;if(key==='e')this.toggleDoor();if(key==='r')this.resetVan();if(key==='h'&&this.mode==='playing')this.audio.effect('horn');if(key==='escape'){if(this.mode==='playing'||this.mode==='countdown')this.pause();else if(this.mode==='paused')void this.resume();} });
+    addEventListener('keydown',e=>{if((e.target as HTMLElement).matches('input,select'))return;if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key))e.preventDefault();const key=e.key.toLowerCase();if(this.demoRecorder?.busy&&key!=='escape')return;this.keys.add(key);if(e.repeat)return;if(key==='s'||key==='arrowdown')this.reverseReady=Math.abs(this.state.speed)<.2;if(key==='e')this.toggleDoor();if(key==='r')this.resetVan();if(key==='h'&&this.mode==='playing')this.audio.effect('horn');if(key==='escape'){if(this.mode==='playing'||this.mode==='countdown')this.pause();else if(this.mode==='paused')void this.resume();} });
     addEventListener('keyup',e=>this.keys.delete(e.key.toLowerCase()));
     addEventListener('blur',()=>{this.keys.clear();this.touch.clear();if(this.mode==='playing'||this.mode==='countdown')this.pause();});
     document.addEventListener('visibilitychange',()=>{if(document.hidden&&(this.mode==='playing'||this.mode==='countdown'))this.pause();});
-    document.querySelectorAll<HTMLElement>('[data-control]').forEach(el=>{const key=el.dataset.control!;el.onpointerdown=e=>{e.preventDefault();el.setPointerCapture(e.pointerId);this.touch.add(key);};const end=()=>this.touch.delete(key);el.onpointerup=end;el.onpointercancel=end;el.onlostpointercapture=end;});
+    document.querySelectorAll<HTMLElement>('[data-control]').forEach(el=>{const key=el.dataset.control!;el.onpointerdown=e=>{e.preventDefault();el.setPointerCapture(e.pointerId);if(key==='brake')this.reverseReady=Math.abs(this.state.speed)<.2;this.touch.add(key);};const end=()=>this.touch.delete(key);el.onpointerup=end;el.onpointercancel=end;el.onlostpointercapture=end;});
   }
   resize(){this.renderer.setSize(innerWidth,innerHeight);this.camera.aspect=innerWidth/innerHeight;this.camera.updateProjectionMatrix();}
   applySettings(){this.audio.setLevels(this.ui.settings);this.renderer.setPixelRatio(Math.min(devicePixelRatio,this.ui.settings.quality==='low'?1:1.65));this.renderer.shadowMap.enabled=this.ui.settings.quality==='high';}
   makeTrip(seed:number){
     for(const group of [...this.traffic.map(t=>t.model.group),...this.pedestrians.map(p=>p.person.group),...this.riderVisuals.map(v=>v.person.group),...this.stopModels.map(s=>s.group)]){this.scene.remove(group);disposeModel(group);}
     this.physics.clearMovers();this.traffic=[];this.pedestrians=[];this.riderVisuals=[];this.stopModels=[];this.riderBodies=[];this.riderHit=new Set();
-    this.trip=createTrip(seed);this.stats=newStats();this.health=100;this.progress=0;this.checkIndex=0;this.doorOpen=false;this.doorAmount=0;this.serviceClock=0;this.unsafeDoor=false;this.terminalOpened=false;this.dropAnnounced.clear();this.hitCooldown.clear();this.pilotServed.clear();this.pilotStop=-1;
+    this.trip=createTrip(seed);this.signals=makeSignals(seed);this.brakeSince=0;this.brakePeak=0;this.wasBraking=false;this.reverseReady=false;this.brakeJolt=0;this.time=0;this.stats=newStats();this.health=100;this.progress=0;this.checkIndex=0;this.doorOpen=false;this.doorAmount=0;this.serviceClock=0;this.unsafeDoor=false;this.terminalOpened=false;this.dropAnnounced.clear();this.hitCooldown.clear();this.pilotServed.clear();this.pilotStop=-1;
     this.state={x:-7,z:32,speed:0,heading:0};this.physics.teleport(this.state);this.physics.reset();this.city.reset();
     for(const stop of this.trip.stops){const s=makeStop(stop);this.scene.add(s.group);this.stopModels.push(s);}
     for(const r of this.trip.riders){const p=this.trip.stops[r.pickup],point=onRoute(p.s+(r.id%2)*1.5,14.3);const person=makePerson(seed+r.id*31);person.group.position.set(point.x,.25,point.z);person.group.rotation.y=-p.heading-Math.PI/2;this.scene.add(person.group);this.riderVisuals.push({person,from:person.group.position.clone(),to:person.group.position.clone(),moving:0,out:false});}
@@ -66,19 +70,20 @@ export class Game {
       const kind=i%8===0?'bus':i%4===0?'van':i%3===0?'taxi':'car';
       const model=makeVehicle(kind,['#487983','#a74135','#c4b587','#688274','#a29c97'][Math.floor(rng()*5)]);
       this.scene.add(model.group);const body=this.physics.addMover('car',i,kind==='bus'?1.23:.95,kind==='bus'?4.65:kind==='van'?2.6:2.2);
-      this.traffic.push({s,speed:8+rng()*5,direction,lane:direction===1?3.05:-3.05,model,body,hitUntil:0});
+      this.traffic.push({s,speed:8+rng()*5,direction,lane:direction===1?3.05:-3.05,model,body,hitUntil:0,halfLength:kind==='bus'?4.7:kind==='van'?2.65:2.25,velocity:0,wrapped:false});
     }
     for(let i=0;i<46;i++){
       let s=35+rng()*(TOTAL_LENGTH-65);for(const corner of CUMULATIVE)if(Math.abs(s-corner)<30)s=clamp(corner+32,32,TOTAL_LENGTH-32);
       const lateral=(i%2===0?1:-1)*(13.8+rng()*1.4),person=makePerson(seed+i*11+1010),body=this.physics.addMover('person',i,.32,.32);
-      this.scene.add(person.group);this.pedestrians.push({s,lateral,person,body,hit:false,cross:i%8===0,phase:rng()*10});
+      this.scene.add(person.group);this.pedestrians.push({s,lateral,person,body,hit:false,cross:false,phase:rng()*10});
     }
+    for(const [ci,light]of this.signals.entries())for(let n=0;n<4;n++){const id=this.pedestrians.length,lateral=n%2? -13.8:13.8,person=makePerson(seed+id*11),body=this.physics.addMover('person',id,.32,.32);this.scene.add(person.group);this.pedestrians.push({s:light.s+(n-1.5)*1.1,lateral,person,body,hit:false,cross:true,phase:n*.08,crossing:ci});}
     this.cameraReady=false;this.animateVehicles(0);this.updateHud();
   }
   async start(seed?:number,demo=false){
     if(this.demoRecorder?.busy&&!demo)return;
     await this.audio.unlock();if(demo&&!this.demoRecorder?.busy)return;
-    this.keys.clear();this.touch.clear();this.demoRun=demo;this.autopilot=demo;
+    this.keys.clear();this.touch.clear();this.demoRun=demo;this.autopilot=demo;this.gameMode=this.ui.gameMode??'challenge';this.ui.applyGameMode?.(this.gameMode);
     if(demo){this.qaSpeed=1;this.qaTraffic=true;this.time=0;}
     this.makeTrip(seed??crypto.getRandomValues(new Uint32Array(1))[0]);this.mode='countdown';this.count=3;this.lastCount=4;this.accumulator=0;this.ui.setMode('countdown');this.ui.show('countdown');this.toastUntil=0;this.ui.hide('toast');this.ui.hide('help');this.ui.hide('settings');this.ui.hide('credits');
   }
@@ -86,23 +91,43 @@ export class Game {
   async resume(){if(this.mode!=='paused')return;await this.audio.unlock();this.mode=this.count>0?'countdown':'playing';this.ui.setMode(this.mode);this.keys.clear();this.touch.clear();}
   menu(){this.mode='menu';this.autopilot=false;this.demoRun=false;this.ui.setMode('menu');this.ui.hide('settings');this.ui.hide('countdown');this.ui.hide('toast');this.audio.pause();this.state={x:-7,z:32,speed:0,heading:0};this.van.group.position.set(-7,0,32);this.van.group.rotation.set(0,0,0);this.cameraReady=false;}
   toast(text:string,bad=false,duration=2.5){this.ui.text('toast',text);this.ui.el('toast').classList.toggle('bad',bad);this.ui.show('toast');this.toastUntil=this.time+duration;}
-  toggleDoor(){if(this.mode!=='playing'||this.doorAmount>.02&&this.doorAmount<.98)return;this.doorOpen=!this.doorOpen;this.serviceClock=0;this.audio.effect('door');if(this.doorOpen&&Math.abs(this.state.speed)>.35&&!this.unsafeDoor){this.stats.doorViolations++;this.unsafeDoor=true;this.audio.say('door',true);this.toast('未停妥開門！駕駛分 −40',true);} }
-  resetVan(){if(this.mode!=='playing')return;const s=this.checkIndex?this.checks[this.checkIndex-1]:8;const p=onRoute(Math.max(8,s-8),7);this.state={...p,speed:0};this.physics.teleport(this.state);this.stats.remaining=Math.max(0,this.stats.remaining-5);this.stats.resets++;this.doorOpen=false;this.doorAmount=0;this.unsafeDoor=false;this.cameraReady=false;this.toast('已返回安全路面 · −5 秒／駕駛分 −30',true);}
+  toggleDoor(){if(this.mode!=='playing'||this.doorAmount>.02&&this.doorAmount<.98)return;this.doorOpen=!this.doorOpen;this.serviceClock=0;this.audio.effect('door');if(this.doorOpen&&Math.abs(this.state.speed)>=STOP_SPEED&&!this.unsafeDoor){this.stats.doorViolations++;this.unsafeDoor=true;this.audio.say('door',true);this.notice('未停妥開門！',40);} }
+  resetVan(){if(this.mode!=='playing')return;const s=this.checkIndex?this.checks[this.checkIndex-1]:8;const p=onRoute(Math.max(8,s-8),7);this.state={...p,speed:0};this.physics.teleport(this.state);if(this.gameMode!=='free')this.stats.remaining=Math.max(0,this.stats.remaining-5);this.stats.resets++;this.doorOpen=false;this.doorAmount=0;this.unsafeDoor=false;this.cameraReady=false;this.toast(this.gameMode==='free'?'已返回安全路面':'已返回安全路面 · −5 秒／駕駛分 −30',true);}
   currentStop(){return this.trip.stops.find(s=>isStoppedAt(this.state,this.state.heading,this.state.speed,s));}
   needsStop(stop:Stop){return stop.terminal||this.trip.riders.some(r=>r.state==='waiting'&&r.pickup===stop.id||r.state==='onboard'&&r.dropoff===stop.id);}
+  notice(message:string,penalty=0){this.toast(message+(this.gameMode!=='free'&&penalty?' · 駕駛分 −'+penalty:''),penalty>0,2.6);}
+  penalty(points:number){if(this.gameMode!=='free')this.stats.safetyPenalty+=points;}
   onHit(target:HitTarget,speed:number){
     if(this.mode!=='playing')return;const key=target.kind+':'+(target.id??(target.obstacle?.x+','+target.obstacle?.z));if(this.time-(this.hitCooldown.get(key)??-10)<1.5)return;this.hitCooldown.set(key,this.time);
     if(target.kind==='person'){
-      if(target.id!>=100){const id=target.id!-100;if(this.riderHit.has(id))return;this.riderHit.add(id);this.trip.riders[id].state='missed';this.riderVisuals[id].person.group.rotation.z=-1.25;}
-      else{const p=this.pedestrians[target.id!];if(p.hit)return;p.hit=true;}
-      this.stats.people++;this.stats.safetyPenalty+=150;this.health-=12;this.audio.effect('person');this.toast('撞到行人！駕駛分 −150',true,3);
+      if(speed<1.5)return;
+      let actor:RiderVisual|Pedestrian;
+      if(target.id!>=100){const id=target.id!-100;if(this.riderHit.has(id))return;this.riderHit.add(id);actor=this.riderVisuals[id];}
+      else{const p=this.pedestrians[target.id!];if(!p||p.hit)return;p.hit=true;actor=p;}
+      const from=actor.person.group.position.clone(),p=projectRoute(from),safe=onRoute(p.s,Math.sign(p.lateral||1)*15);
+      actor.dodge={at:this.time,from,to:new T.Vector3(safe.x,.25,safe.z)};
+      this.stats.people++;this.penalty(150);this.audio.say('crash',true);this.notice('行人及時跳開，沒有受傷！',150);
     }else if(speed>1.2||target.kind==='car'){
-      if(target.kind==='car'){this.stats.cars++;this.stats.safetyPenalty+=60;this.traffic[target.id!].hitUntil=this.time+2;this.health-=6+speed*.65;this.audio.say('crash');this.toast('撞車！駕駛分 −60',true);}
-      else{this.stats.objects++;this.stats.safetyPenalty+=20;this.health-=3+speed*.65;this.toast('碰撞物件 · 駕駛分 −20',true);}
+      let damage=0;
+      if(target.kind==='car'){this.stats.cars++;this.penalty(60);this.traffic[target.id!].hitUntil=this.time+2;damage=6+speed*.65;this.audio.say('crash');this.notice('撞車！',60);}
+      else{this.stats.objects++;this.penalty(20);damage=3+speed*.65;this.notice('碰撞物件',20);}
+      if(this.gameMode!=='free')this.health-=damage;
       this.audio.effect('hit',speed/13);
       if(target.obstacle?.group&&speed>3){target.obstacle.group.rotation.x=.9;target.obstacle.group.rotation.z=.28;}
     }else return;
-    this.health=Math.max(0,this.health);this.flash=1;
+    this.health=Math.max(0,this.health);this.flash=.65;
+  }
+  animateDodge(actor:RiderVisual|Pedestrian){
+    const d=actor.dodge;if(!d)return;
+    const t=clamp((this.time-d.at)/.52,0,1),ease=1-(1-t)**3;
+    actor.person.group.position.lerpVectors(d.from,d.to,ease);actor.person.group.position.y=.25+Math.sin(t*Math.PI)*.9;
+    actor.person.group.rotation.z=Math.sin(t*Math.PI)*.15;actor.person.arm.rotation.z=-2.5*(1-t);
+  }
+  evadePeople(){
+    if(Math.abs(this.state.speed)<1.5||this.qa&&!this.qaTraffic)return;
+    const danger=(pos:T.Vector3)=>{const dx=pos.x-this.state.x,dz=pos.z-this.state.z,along=(dx*Math.sin(this.state.heading)-dz*Math.cos(this.state.heading))*Math.sign(this.state.speed),across=dx*Math.cos(this.state.heading)+dz*Math.sin(this.state.heading);return Math.abs(across)<1.65&&along> -3&&along<3.4+Math.abs(this.state.speed)*.22;};
+    this.pedestrians.forEach((p,id)=>{if(!p.hit&&danger(p.person.group.position))this.onHit({kind:'person',id},Math.abs(this.state.speed));});
+    this.riderVisuals.forEach((v,id)=>{if(this.trip.riders[id].state==='waiting'&&!this.riderHit.has(id)&&danger(v.person.group.position))this.onHit({kind:'person',id:id+100},Math.abs(this.state.speed));});
   }
   updatePassengers(dt:number){
     const s=this.currentStop();const pending=s?this.trip.riders.filter(r=>r.state==='onboard'&&(r.dropoff===s.id||s.terminal)||r.state==='waiting'&&r.pickup===s.id):[];
@@ -110,7 +135,7 @@ export class Game {
     if(s&&this.doorAmount>.97&&this.doorOpen){
       if(s.terminal)this.terminalOpened=true;
       const r=pending.find(r=>r.state==='onboard')??(onboard<CAPACITY?pending.find(r=>r.state==='waiting'):undefined);
-      if(r){this.serviceClock+=dt;if(this.serviceClock>=.68){this.serviceClock=0;const v=this.riderVisuals[r.id],door=new T.Vector3(this.state.x-Math.cos(this.state.heading)*1.6,0.25,this.state.z-Math.sin(this.state.heading)*1.6);const side=onRoute(s.s+(r.id%2)*1.5,14.3);v.person.group.visible=true;v.moving=.65;
+      if(r){this.serviceClock+=dt;if(this.serviceClock>=.68){this.serviceClock=0;const v=this.riderVisuals[r.id],doorPoint=doorPosition(this.state,this.state.heading),door=new T.Vector3(doorPoint.x,.25,doorPoint.z);const side=onRoute(s.s+(r.id%2)*1.5,14.3);v.person.group.visible=true;v.moving=.65;
         if(r.state==='waiting'){r.state='onboard';this.stats.picked++;v.from.copy(v.person.group.position);v.to.copy(door);v.out=false;this.audio.effect('coin');this.toast('乘客上車 · 收車費 $12',false,1.1);}
         else{r.state='delivered';this.stats.delivered++;v.from.copy(door);v.to.set(side.x,.25,side.z);v.person.group.position.copy(door);v.out=true;this.audio.say('thanks');this.toast('乘客安全送達',false,1.1);}
       }}else this.serviceClock=0;
@@ -118,7 +143,7 @@ export class Game {
     for(const r of this.trip.riders){
       const p=this.trip.stops[r.pickup],d=this.trip.stops[r.dropoff];
       if(r.state==='waiting'&&this.progress>p.s+25){r.state='missed';this.riderVisuals[r.id].person.arm.rotation.z=0;}
-      if(r.state==='onboard'&&this.progress>d.s+25&&!d.terminal){r.dropoff=8;this.stats.missed++;this.stats.safetyPenalty+=25;this.toast('錯過落客位置 · 改於尾站落車 −25',true);}
+      if(r.state==='onboard'&&this.progress>d.s+25&&!d.terminal){r.dropoff=8;this.stats.missed++;this.penalty(25);this.notice('錯過落客位置 · 改於尾站落車',25);}
     }
     const drop=this.trip.stops.find(s=>s.s>=this.progress-8&&s.s-this.progress<90&&this.trip.riders.some(r=>r.state==='onboard'&&r.dropoff===s.id));
     if(drop&&!this.dropAnnounced.has(drop.id)){this.dropAnnounced.add(drop.id);this.audio.say('dropoff',true);this.toast('「前面有落，唔該！」',false,2.8);}
@@ -126,33 +151,29 @@ export class Game {
   }
   animateVehicles(dt:number){
     for(const [i,body]of this.riderBodies.entries()){const r=this.trip.riders[i],v=this.riderVisuals[i].person.group.position;const present=r.state==='waiting'&&!this.riderHit.has(i);body.setNextKinematicTranslation(present?{x:v.x,y:1,z:v.z}:{x:15000+i,y:1,z:15000});}
+    if(this.mode==='playing'&&this.qaTraffic)moveTraffic(this.traffic,this.signals,dt,this.time,{...this.state,s:projectRoute(this.state).s});
     for(const [i,t]of this.traffic.entries()){
-      let rate=this.time<t.hitUntil?0:t.speed;
-      if(this.mode==='playing'&&this.qaTraffic){
-        const p=onRoute(t.s,t.lane),dx=this.state.x-p.x,dz=this.state.z-p.z,front=(dx*Math.sin(p.heading)-dz*Math.cos(p.heading))*t.direction,side=Math.abs(dx*Math.cos(p.heading)+dz*Math.sin(p.heading));
-        if(front>0&&front<16&&side<2.5)rate=Math.min(rate,Math.max(0,(front-8)*1.5));
-        for(const other of this.traffic){if(t===other||t.direction!==other.direction)continue;const gap=(other.s-t.s)*t.direction;if(gap>0&&gap<13)rate=Math.min(rate,Math.max(0,(gap-8)*1.6));}
-        t.s+=rate*t.direction*dt;if(t.s>TOTAL_LENGTH+30)t.s=-25;if(t.s< -30)t.s=TOTAL_LENGTH+25;
-      }
-      const p=onRoute(clamp(t.s,0,TOTAL_LENGTH),t.lane),a=onRoute(clamp(t.s-5,0,TOTAL_LENGTH),t.lane),b=onRoute(clamp(t.s+5,0,TOTAL_LENGTH),t.lane);
-      const heading=Math.atan2(b.x-a.x,-(b.z-a.z))+(t.direction<0?Math.PI:0);let x=(a.x+b.x)*.5,z=(a.z+b.z)*.5;
-      if(this.qa&&!this.qaTraffic){x=10000+i*20;z=10000;}t.model.group.position.set(x,0,z);t.model.group.rotation.y=-heading;
+      const a=trafficPoint(t.s-3,t.lane),b=trafficPoint(t.s+3,t.lane),heading=Math.atan2(b.x-a.x,-(b.z-a.z))+(t.direction<0?Math.PI:0);
+      let x=(a.x+b.x)*.5,z=(a.z+b.z)*.5;
+      if(this.qa&&!this.qaTraffic){x=10000+i*20;z=10000;}
+      t.model.group.position.set(x,0,z);t.model.group.rotation.y=-heading;
+      if(t.wrapped)t.body.setTranslation({x,y:1.2,z},true);
       t.body.setNextKinematicTranslation({x,y:1.2,z});t.body.setNextKinematicRotation({x:0,y:Math.sin(-heading/2),z:0,w:Math.cos(-heading/2)});
-      t.model.wheels.forEach(w=>w.rotation.x-=rate*dt/.5);
-      t.model.group.visible=Math.hypot(this.state.x-x,this.state.z-z)<250;
+      t.model.wheels.forEach(w=>w.rotation.x-=t.velocity*dt/.5);t.model.group.visible=Math.hypot(this.state.x-x,this.state.z-z)<300;
     }
+    this.city.updateSignals?.(this.signals);
     for(const [i,p]of this.pedestrians.entries()){
       let lateral=p.lateral,s=p.s;
-      if(p.cross&&!p.hit){const phase=(this.time*.25+p.phase)%14,desired=phase<5&&Math.abs(this.progress-p.s)>80?-p.lateral:p.lateral;p.offset=(p.offset??p.lateral)+clamp(desired-(p.offset??p.lateral),-dt*1.4,dt*1.4);lateral=p.offset;}
+      if(p.crossing!==undefined){const signal=this.signals[p.crossing],t=signal.phase==='green'?1:signal.phase==='red'?clamp((signal.elapsed-p.phase)/4.5,0,1):0;lateral=p.lateral*(1-t)+Math.sign(p.lateral)*.8*t;}
       if(!p.cross&&!p.hit)s+=Math.sin(this.time*.22+p.phase)*5;
-      const pos=onRoute(s,lateral);p.person.group.position.set(pos.x,.24,pos.z);p.person.group.rotation.y=-pos.heading+(p.cross?Math.PI/2:0);
-      if(p.hit){p.person.group.rotation.z=-1.25;p.person.group.position.y=.35;}
-      else animatePerson(p.person,this.time,false,true);
+      const pos=onRoute(s,lateral);p.person.group.position.set(pos.x,.24,pos.z);p.person.group.rotation.y=-pos.heading+(p.cross?Math.sign(p.lateral)*Math.PI/2:0);
+      animatePerson(p.person,this.time,false,!p.hit&&(p.cross?this.signals[p.crossing!].phase==='red':true));
+      if(p.dodge)this.animateDodge(p);
       let x=pos.x,z=pos.z;if(p.hit||this.qa&&!this.qaTraffic){x=10000+i;z=12000;}
       p.body.setNextKinematicTranslation({x,y:1.0,z});p.person.group.visible=Math.hypot(this.state.x-pos.x,this.state.z-pos.z)<140;
     }
   }
-  controls():Controls {return{throttle:this.keys.has('w')||this.keys.has('arrowup')||this.touch.has('gas')?1:this.keys.has('s')||this.keys.has('arrowdown')||this.touch.has('brake')?-1:0,steer:(this.keys.has('d')||this.keys.has('arrowright')||this.touch.has('right')?1:0)-(this.keys.has('a')||this.keys.has('arrowleft')||this.touch.has('left')?1:0),handbrake:this.keys.has(' ')};}
+  controls():Controls {return{throttle:this.keys.has('w')||this.keys.has('arrowup')||this.touch.has('gas')?1:this.keys.has('s')||this.keys.has('arrowdown')||this.touch.has('brake')?-1:0,steer:(this.keys.has('d')||this.keys.has('arrowright')||this.touch.has('right')?1:0)-(this.keys.has('a')||this.keys.has('arrowleft')||this.touch.has('left')?1:0),handbrake:this.keys.has(' '),reverse:this.reverseReady};}
   pilot():Controls{
     if(this.doorOpen||this.doorAmount>.01){
       const at=this.currentStop();
@@ -169,34 +190,42 @@ export class Game {
     if(this.doorOpen||this.doorAmount>.01)return{throttle:0,steer:0,handbrake:true};
     const turn=CUMULATIVE.slice(1,-1).find(s=>s>p.s-4);let targetSpeed=19.5;
     if(turn&&turn-p.s<32)targetSpeed=Math.min(targetSpeed,7+Math.max(0,turn-p.s-10)*.38);
+    const light=this.signals.find(l=>l.s>p.s&&l.s-p.s<75&&(l.phase==='amber'||l.phase==='red'));
+    if(light)targetSpeed=Math.min(targetSpeed,Math.sqrt(Math.max(0,light.s-12-p.s)*10));
     if(stop)targetSpeed=Math.min(targetSpeed,Math.sqrt(Math.max(0,dist-.25)*10));
     const ahead=Math.min(5+Math.abs(this.state.speed)*.50,Math.max(1.4,dist));const target=onRoute(clamp(p.s+ahead,0,TOTAL_LENGTH),7);
     const heading=Math.atan2(target.x-this.state.x,-(target.z-this.state.z)),err=angleDiff(heading,this.state.heading);
     if(Math.abs(err)>.7)targetSpeed=Math.min(targetSpeed,7);
     const throttle=this.state.speed<targetSpeed-.6?1:this.state.speed>targetSpeed+.3?-1:0;
-    return{throttle,steer:clamp(err*2.7,-1,1),handbrake:dist<.8&&Math.abs(this.state.speed)<1};
+    return{throttle,steer:clamp(err*2.7,-1,1),handbrake:(dist<.8||!!light&&light.s-p.s<12.5)&&Math.abs(this.state.speed)<1,reverse:false};
   }
   step(dt:number){
     this.time+=dt;
     if(this.mode==='countdown'){this.count-=dt;const n=Math.ceil(this.count);if(n!==this.lastCount&&n>0){this.lastCount=n;this.audio.effect('count');}this.ui.text('countdown',n>0?String(n):'開車！');if(this.count<=0){this.mode='playing';this.ui.setMode('playing');this.ui.hide('countdown');this.audio.effect('start');this.toast('靠左行車 · 留意綠色上客方塊');}return;}
     if(this.mode!=='playing')return;
     this.stats.remaining=Math.max(0,this.stats.remaining-dt);if(this.stats.remaining<=0){this.finish('時間到！');return;}
-    const input=this.autopilot?this.pilot():this.controls();this.animateVehicles(dt);
+    const previous=projectRoute(this.state),beforeSpeed=Math.abs(this.state.speed);updateSignals(this.signals,previous.s,dt);
+    const input=this.autopilot?this.pilot():this.controls();this.animateVehicles(dt);this.evadePeople();
     this.state=this.physics.step(this.state,input,this.health,this.city.distanceToRoad(this.state)>12,(a,b)=>this.onHit(a,b));
     const p=projectRoute(this.state);
+    const braking=input.throttle<0||input.handbrake;
+    if(braking&&!this.wasBraking){this.brakeSince=this.time;this.brakePeak=beforeSpeed;}
+    if(braking&&this.brakePeak>=50/3.6&&Math.abs(this.state.speed)<.5&&this.time-this.brakeSince<1.1&&this.trip.riders.some(r=>r.state==='onboard')){this.stats.harshBrakes++;this.penalty(25);this.brakePeak=0;this.brakeJolt=1;this.audio.say('slow',true);this.audio.effect('brake');this.notice('高速急煞！乘客不滿',25);}
+    this.wasBraking=braking;
+    for(const light of this.signals){const line=light.s-7;if(light.phase==='red'&&!light.violated&&previous.s+3.1<line&&p.s+3.1>=line&&p.distance<12){light.violated=true;this.stats.redLights++;this.penalty(80);this.audio.say('crash',true);this.notice('衝紅燈！留意過路行人',80);}}
     while(this.checkIndex<this.checks.length){const c=onRoute(this.checks[this.checkIndex]);if(Math.hypot(this.state.x-c.x,this.state.z-c.z)>22)break;this.checkIndex++;}
     const limit=this.checkIndex<this.checks.length?this.checks[this.checkIndex]+12:TOTAL_LENGTH;
     if(p.distance<20)this.progress=Math.max(this.progress,Math.min(p.s,limit));
     if(Math.abs(this.state.speed)*3.6>80)this.stats.overspeed+=dt;
     this.doorAmount=clamp(this.doorAmount+(this.doorOpen?1:-1)*dt*2,0,1);
-    if(this.doorAmount>.03&&Math.abs(this.state.speed)>.35&&!this.unsafeDoor){this.stats.doorViolations++;this.unsafeDoor=true;this.audio.say('door',true);this.toast('未關門開車！駕駛分 −40',true);}
+    if(this.doorAmount>.03&&Math.abs(this.state.speed)>=STOP_SPEED&&!this.unsafeDoor){this.stats.doorViolations++;this.unsafeDoor=true;this.audio.say('door',true);this.notice('未關門開車！',40);}
     if(this.doorAmount===0)this.unsafeDoor=false;
     this.updatePassengers(dt);
     if(this.health<=0)this.finish('小巴損壞，無法繼續');
     this.audio.tick(this.state.speed,input.throttle,input.throttle<0||input.handbrake,this.stats.remaining,true);
     if(Math.hypot(this.state.x,this.state.z)>2000)this.resetVan();
   }
-  finish(reason:string){if(this.mode!=='playing')return;this.mode='results';this.autopilot=false;this.ui.hide('countdown');this.ui.hide('toast');this.audio.tick(0,0,false,0,false);this.audio.effect('finish');this.ui.results(this.stats,this.trip.seed,reason,this.demoRun);if(this.demoRun)this.demoRecorder?.finished();}
+  finish(reason:string){if(this.mode!=='playing')return;this.mode='results';this.autopilot=false;this.ui.hide('countdown');this.ui.hide('toast');this.audio.tick(0,0,false,0,false);this.audio.effect('finish');this.ui.results(this.stats,this.trip.seed,reason,this.demoRun,this.gameMode);if(this.demoRun)this.demoRecorder?.finished();}
   frame(now:number){
     const raw=this.last?(now-this.last)/1000:1/60;this.last=now;const dt=Math.min(raw,.12);this.accumulator+=dt*(this.qa?this.qaSpeed:1);
     let steps=0;while(this.accumulator>=1/60&&steps<30){this.step(1/60);this.accumulator-=1/60;steps++;}if(steps===30)this.accumulator=0;
@@ -205,14 +234,16 @@ export class Game {
     if(this.qa)this.updateQa();requestAnimationFrame(t=>this.frame(t));
   }
   render(dt:number){
-    this.van.group.position.set(this.state.x,.14,this.state.z);this.van.group.rotation.set(0,-this.state.heading,0);
+    this.brakeJolt=Math.max(0,this.brakeJolt-dt*2.5);this.van.group.position.set(this.state.x,.14,this.state.z);this.van.group.rotation.set(0,-this.state.heading,0);
     if(this.mode==='playing')this.van.group.rotation.z=-this.controls().steer*Math.min(.03,Math.abs(this.state.speed)*.0014);
+    if(this.mode==='playing')this.van.group.rotation.x=-this.brakeJolt*.055;
+    this.van.brake.forEach(l=>l.scale.y=(this.controls().throttle<0||this.controls().handbrake)?1.1:1);
     if(this.van.door){this.van.door.position.z=-2.1+this.doorAmount*1.15;this.van.door.rotation.y=this.doorAmount*.16;}
     if(this.mode==='playing')this.van.wheels.forEach(w=>w.rotation.x-=this.state.speed*dt/.52);
     for(const [i,v]of this.riderVisuals.entries()){
       const r=this.trip.riders[i];
       if(v.moving>0&&this.mode==='playing'){v.moving=Math.max(0,v.moving-dt);v.person.group.position.lerpVectors(v.from,v.to,1-v.moving/.65);animatePerson(v.person,this.time,false,true);if(v.moving===0&&!v.out)v.person.group.visible=false;}
-      else if(r.state==='waiting')animatePerson(v.person,this.time,true,false);
+      else if(r.state==='waiting'){animatePerson(v.person,this.time,true,false);if(v.dodge)this.animateDodge(v);}
     }
     for(const [i,s]of this.stopModels.entries()){
       const st=this.trip.stops[i],drop=this.trip.riders.some(r=>r.state==='onboard'&&r.dropoff===i),pickup=this.trip.riders.some(r=>r.state==='waiting'&&r.pickup===i);
@@ -232,14 +263,16 @@ export class Game {
       if(!this.cameraReady){this.cameraPos.copy(ideal);this.cameraLook.copy(look);this.cameraReady=true;}else{this.cameraPos.lerp(ideal,1-Math.exp(-dt*7));this.cameraLook.lerp(look,1-Math.exp(-dt*9));}
       this.camera.position.copy(this.cameraPos);this.camera.lookAt(this.cameraLook);const fov=55+Math.min(7,Math.abs(this.state.speed)*.20);if(Math.abs(this.camera.fov-fov)>.05){this.camera.fov=fov;this.camera.updateProjectionMatrix();}
     }
-    this.sun.position.set(this.state.x-38,80,this.state.z+32);this.sun.target.position.set(this.state.x,0,this.state.z);this.sun.target.updateMatrixWorld();
+    this.sun.position.set(this.state.x-48,65,this.state.z+42);this.sun.target.position.set(this.state.x,0,this.state.z);this.sun.target.updateMatrixWorld();
     this.smoke.visible=this.health<40&&this.mode==='playing';if(this.smoke.visible){for(let i=0;i<12;i++){const age=(this.time*.7+i/12)%1;this.smokeDummy.position.set(this.state.x+Math.sin(i)*age,2.5+age*4,this.state.z+2+age*2);this.smokeDummy.scale.setScalar(.15+age*.7);this.smokeDummy.updateMatrix();this.smoke.setMatrixAt(i,this.smokeDummy.matrix);}this.smoke.instanceMatrix.needsUpdate=true;}
     this.flash=Math.max(0,this.flash-dt*2.8);this.ui.el('damage-flash').style.opacity=String(this.flash*.8);if(this.time>this.toastUntil)this.ui.hide('toast');
     this.renderer.render(this.scene,this.camera);
   }
   updateHud(){
     const kmh=Math.abs(this.state.speed)*3.6,secs=Math.ceil(this.stats.remaining),p=projectRoute(this.state);this.ui.text('timer',`${String(Math.floor(secs/60)).padStart(2,'0')}:${String(secs%60).padStart(2,'0')}`);this.ui.el('timer').parentElement!.classList.toggle('urgent',secs<=30);this.ui.text('speed',String(Math.round(kmh)).padStart(3,'0'));this.ui.el('speed').closest('.speed-unit')!.classList.toggle('alarm',kmh>80);
-    this.ui.text('health-value',Math.ceil(this.health)+'%');this.ui.el('health-fill').style.width=this.health+'%';this.ui.el('health-fill').style.background=this.health<35?'#ef6950':'#8fd3a5';this.ui.text('score',String(scoreRun(this.stats).total).padStart(4,'0'));
+    this.ui.text('health-value',Math.ceil(this.health)+'%');this.ui.el('health-fill').style.width=this.health+'%';this.ui.el('health-fill').style.background=this.health<35?'#ef6950':'#8fd3a5';if(this.gameMode!=='free'){const live=scoreRun(this.stats,this.trip.riders.length,this.progress/TOTAL_LENGTH);this.ui.text('score',String(live.total).padStart(4,'0'));this.ui.text('live-grade',live.grade);this.ui.el('live-grade').dataset.grade=live.grade;this.ui.text('grade-next',live.next?'距下一級 '+live.next+' 分':'維持安全駕駛');}
+    this.ui.text('free-service',this.stats.delivered+' / '+this.trip.riders.length);
+    const trafficLight=this.signals.find(l=>l.s>p.s-9&&l.s-p.s<100);if(trafficLight){this.ui.show('traffic-status');this.ui.text('traffic-status',trafficLight.phase==='red'?'● 紅燈 · '+Math.ceil(trafficLight.duration-trafficLight.elapsed)+' 秒 · 行人過路':trafficLight.phase==='amber'?'● 黃燈 · 準備停車':'● 綠燈 · 留意過路處');this.ui.el('traffic-status').dataset.phase=trafficLight.phase;}else this.ui.hide('traffic-status');
     const onboard=this.trip.riders.filter(r=>r.state==='onboard').length;this.ui.text('riders',String(onboard));this.ui.text('delivered',String(this.stats.delivered));this.ui.text('door-status',this.doorAmount>.01?'車門開啟':'車門已關');this.ui.el('door-status').classList.toggle('open',this.doorAmount>.01);this.ui.text('street',STREETS[p.segment]);
     const turn=CUMULATIVE.find(s=>s>p.s+13)??TOTAL_LENGTH,target=onRoute(Math.min(turn+10,TOTAL_LENGTH),7),angle=Math.atan2(target.x-this.state.x,-(target.z-this.state.z)),diff=angleDiff(angle,this.state.heading);
     let nav='沿路直行',navAngle=0;const dist=turn-p.s;
@@ -248,7 +281,7 @@ export class Game {
     else if(this.progress>TOTAL_LENGTH-85){nav='尾站就在前面';}
     this.ui.text('nav-title',nav);this.ui.text('nav-distance',Math.max(0,Math.round(dist))+' m');this.ui.el('nav-arrow').style.transform=`rotate(${navAngle}rad)`;
     const stop=this.trip.stops.find(s=>s.s>this.progress-20&&this.needsStop(s));if(stop&&stop.s-this.progress<160){const isDrop=this.trip.riders.some(r=>r.state==='onboard'&&r.dropoff===stop.id);this.ui.show('stop-banner');this.ui.text('stop-label',stop.terminal?'停妥、落客、關門，完成路線':isDrop?'乘客要求落車':'前方有人招手');this.ui.text('stop-name',stop.name);this.ui.text('stop-distance',Math.max(0,Math.round(stop.s-p.s))+' m');this.ui.el('stop-banner').classList.toggle('dropoff',isDrop);}else this.ui.hide('stop-banner');
-    const current=this.currentStop();let prompt='停妥後開門上客';if(this.doorOpen){const pending=current&&this.trip.riders.some(r=>r.state==='waiting'&&r.pickup===current.id||r.state==='onboard'&&(r.dropoff===current.id||current.terminal));prompt=pending?'乘客上落中…':'上落客完成 · 按 E 關門';if(!current)prompt='請關門後行車';}else if(this.doorAmount>.02)prompt='正在關門…';else if(current)prompt=current.terminal?'按 E 開門 · 尾站落客':'按 E 開門 · 乘客上落';else if(kmh>2)prompt='靠左停入發光方塊';this.ui.text('door-prompt',prompt);this.ui.el('service-fill').style.width=(this.serviceClock/.68*100)+'%';
+    const current=this.currentStop();let prompt='停妥後開門上客';if(this.doorOpen){const pending=current&&this.trip.riders.some(r=>r.state==='waiting'&&r.pickup===current.id||r.state==='onboard'&&(r.dropoff===current.id||current.terminal));prompt=pending?'乘客上落中…':'上落客完成 · 按 E 關門';if(!current)prompt='請關門後行車';}else if(this.doorAmount>.02)prompt='正在關門…';else if(current)prompt=current.terminal?'按 E 開門 · 尾站落客':'按 E 開門 · 乘客上落';else if(kmh>2)prompt='將左前車門停入發光方塊';this.ui.text('door-prompt',prompt);this.ui.el('service-fill').style.width=(this.serviceClock/.68*100)+'%';
     const progress=clamp(this.progress/TOTAL_LENGTH*100,0,100);this.ui.text('progress-text',Math.floor(progress)+'%');this.ui.el('progress-fill').style.width=progress+'%';
   }
   makeQa(){

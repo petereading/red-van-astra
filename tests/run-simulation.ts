@@ -10,7 +10,7 @@ import { CUMULATIVE,TOTAL_LENGTH,scoreRun } from '../src/core';
 
 Object.defineProperty(globalThis,'document',{value:{createElement:(tag:string)=>{if(tag==='canvas')return createCanvas(768,256);throw new Error(tag);}},configurable:true});
 const nodes=new Map<string,any>();
-function node(id:string):any{if(!nodes.has(id)){const el:any={style:{},textContent:'',innerHTML:'',classList:{toggle(){},add(){},remove(){}},closest:()=>el};el.parentElement=el;nodes.set(id,el);}return nodes.get(id);}
+function node(id:string):any{if(!nodes.has(id)){const el:any={style:{},dataset:{},textContent:'',innerHTML:'',classList:{toggle(){},add(){},remove(){}},closest:()=>el};el.parentElement=el;nodes.set(id,el);}return nodes.get(id);}
 const ui:any={el:node,text:(id:string,s:string)=>node(id).textContent=s,show(){},hide(){},setMode(){},results(){}};
 await Physics.init();
 const seeds=process.argv.slice(2).map(Number);if(!seeds.length)seeds.push(8521986);

@@ -10,7 +10,7 @@ Object.defineProperty(globalThis,'document',{value:{createElement:(tag:string)=>
 Object.defineProperty(globalThis,'window',{value:globalThis,configurable:true});
 export async function headlessGame(seed=8521986,traffic=false){
   const nodes=new Map<string,any>();
-  function node(id:string):any{if(!nodes.has(id)){const el:any={style:{},textContent:'',innerHTML:'',classList:{toggle(){},add(){},remove(){}},closest:()=>el};el.parentElement=el;nodes.set(id,el);}return nodes.get(id);}
+  function node(id:string):any{if(!nodes.has(id)){const el:any={style:{},dataset:{},textContent:'',innerHTML:'',classList:{toggle(){},add(){},remove(){}},closest:()=>el};el.parentElement=el;nodes.set(id,el);}return nodes.get(id);}
   const ui:any={el:node,text:(id:string,s:string)=>node(id).textContent=s,show(){},hide(){},setMode(){},results(){}};
   await Physics.init();
   const g=Object.create(Game.prototype) as Game;

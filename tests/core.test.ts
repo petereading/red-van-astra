@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createTrip, CUMULATIVE, TOTAL_LENGTH, onRoute, projectRoute, isStoppedAt, newStats, scoreRun, driveStep, type DriveState } from '../src/core';
+import { createTrip, CUMULATIVE, TOTAL_LENGTH, onRoute, projectRoute, isStoppedAt, newStats, scoreRun, driveStep, freeRunSuccess, type DriveState } from '../src/core';
 import { Physics } from '../src/physics';
 
 test('300 random trips have ten riders, reachable downstream stops, pavement openings and a reproducible seed',()=>{
@@ -11,9 +11,23 @@ test('300 random trips have ten riders, reachable downstream stops, pavement ope
   }
   assert.notDeepEqual(createTrip(1),createTrip(2));
 });
-test('stop validation requires the whole vehicle aligned, stationary and in the bay',()=>{
-  const stop=createTrip(1).stops[0];assert.equal(isStoppedAt(stop,stop.heading,.5,stop),false);assert.equal(isStoppedAt(stop,stop.heading+Math.PI,0,stop),false);
-  assert.equal(isStoppedAt({...stop,x:stop.x+2},stop.heading,0,stop),false);assert.equal(isStoppedAt({...stop,z:stop.z+4},stop.heading,0,stop),false);
+test('boarding checks the door point rather than the whole vehicle footprint',()=>{
+  const stop=createTrip(1).stops[0];assert.equal(isStoppedAt(stop,stop.heading,.5,stop),false);
+  assert.equal(isStoppedAt({...stop,x:stop.x+3},stop.heading,0,stop),true);
+  assert.equal(isStoppedAt({...stop,z:stop.z+6},stop.heading,0,stop),true);
+  assert.equal(isStoppedAt({...stop,x:stop.x+5},stop.heading,0,stop),false);
+  assert.equal(isStoppedAt({...stop,z:stop.z+10},stop.heading,0,stop),false);
+  assert.equal(isStoppedAt(stop,stop.heading+.8,0,stop),true);
+});
+test('80 km/h braking stops within 0.7 seconds and less than 8 metres without reversing',()=>{
+  let s:DriveState={x:0,z:0,heading:0,speed:80/3.6};for(let i=0;i<42;i++)s=driveStep(s,{throttle:-1,steer:0,handbrake:false,reverse:false},1/60,100);
+  assert.equal(s.speed,0);assert.ok(Math.abs(s.z)<8);
+  for(let i=0;i<60;i++)s=driveStep(s,{throttle:-1,steer:0,handbrake:false,reverse:false},1/60,100);assert.equal(s.speed,0);
+});
+test('live grade improves with earned route points and free play requires all objectives',()=>{
+  const stats=newStats();const start=scoreRun(stats,10,0);stats.picked=10;stats.delivered=8;const mid=scoreRun(stats,10,.8);
+  assert.ok(mid.total>start.total);assert.notEqual(mid.grade,'D');assert.equal(scoreRun(stats).grade,'D');
+  stats.completed=true;assert.equal(freeRunSuccess(stats),false);stats.delivered=10;assert.equal(freeRunSuccess(stats),true);stats.missed=1;assert.equal(freeRunSuccess(stats),false);
 });
 test('route projection works around every segment and turn without ambiguity',()=>{for(let s=0;s<TOTAL_LENGTH;s+=5){const p=onRoute(s);assert.ok(Math.abs(projectRoute(p).s-s)<.001);}});
 test('grades cannot reward failure or an empty speed run with S',()=>{

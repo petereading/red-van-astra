@@ -53,7 +53,8 @@ export class GameAudio {
       this.step++;this.nextBeat+=60/158/4;
     }
   }
-  effect(kind:'coin'|'door'|'hit'|'person'|'count'|'start'|'finish'|'horn',intensity=1){const c=this.context;if(!c)return;const t=c.currentTime;
+  effect(kind:'coin'|'door'|'hit'|'person'|'count'|'start'|'finish'|'horn'|'brake',intensity=1){const c=this.context;if(!c)return;const t=c.currentTime;
+    if(kind==='brake'){this.hiss(t,.4,.19,2400);this.tone(200,t,.25,.08,'sawtooth',this.sfx,70);}
     if(kind==='coin'){this.tone(1568,t,.12,.15);this.tone(2093,t+.09,.2,.13);}
     if(kind==='door'){this.hiss(t,.40,.16,700);this.tone(130,t+.28,.10,.11,'triangle',this.sfx,50);}
     if(kind==='hit'||kind==='person'){this.hiss(t,.22,.24*clamp(intensity,.3,1.5),400);this.tone(85,t,.19,.3,'triangle',this.sfx,25);if(kind==='person')this.say('crash',true);}

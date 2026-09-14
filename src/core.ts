@@ -58,41 +58,43 @@ export function createTrip(seed: number): Trip {
   }
   return { seed, stops, riders, trafficSeed: Math.floor(rng() * 0xffffffff) };
 }
+export const STOP_HALF_WIDTH=3, STOP_HALF_LENGTH=7, STOP_SPEED=.5;
+export function doorPosition(p:V2,heading:number){return{x:p.x-1.13*Math.cos(heading)+2.1*Math.sin(heading),z:p.z-1.13*Math.sin(heading)-2.1*Math.cos(heading)};}
 export function isStoppedAt(p: V2, heading: number, speed: number, stop: Stop) {
-  const dx = p.x - stop.x, dz = p.z - stop.z;
-  const along = dx * Math.sin(stop.heading) - dz * Math.cos(stop.heading);
-  const across = dx * Math.cos(stop.heading) + dz * Math.sin(stop.heading);
-  const angle = Math.abs(angleDiff(heading, stop.heading));
-  const halfAcross = 1.1 * Math.cos(angle) + 3.2 * Math.sin(angle);
-  const halfAlong = 3.2 * Math.cos(angle) + 1.1 * Math.sin(angle);
-  return Math.abs(speed) < .35 && angle < .38 && Math.abs(along) + halfAlong < 6 && Math.abs(across) + halfAcross < 2.6;
+  const door=doorPosition(p,heading),dx=door.x-stop.x,dz=door.z-stop.z;
+  const along=dx*Math.sin(stop.heading)-dz*Math.cos(stop.heading);
+  const across=dx*Math.cos(stop.heading)+dz*Math.sin(stop.heading);
+  return Math.abs(speed)<STOP_SPEED&&Math.abs(along)<=STOP_HALF_LENGTH&&Math.abs(across)<=STOP_HALF_WIDTH;
 }
+export type GameMode='challenge'|'free';
 export type Stats = {
   picked: number; delivered: number; overspeed: number; doorViolations: number;
   objects: number; cars: number; people: number; resets: number; missed: number;
-  remaining: number; completed: boolean; safetyPenalty: number;
+  remaining: number; completed: boolean; safetyPenalty: number; harshBrakes:number; redLights:number;
 };
-export function newStats(): Stats { return { picked: 0, delivered: 0, overspeed: 0, doorViolations: 0, objects: 0, cars: 0, people: 0, resets: 0, missed: 0, remaining: RUN_SECONDS, completed: false, safetyPenalty: 0 }; }
-export function scoreRun(stats: Stats, totalRiders = 10) {
-  const route = stats.completed ? 400 : 0;
+export function newStats(): Stats { return { picked: 0, delivered: 0, overspeed: 0, doorViolations: 0, objects: 0, cars: 0, people: 0, resets: 0, missed: 0, remaining: RUN_SECONDS, completed: false, safetyPenalty: 0, harshBrakes:0, redLights:0 }; }
+export function scoreRun(stats: Stats, totalRiders = 10, progress?:number) {
+  const route = stats.completed ? 400 : progress===undefined?0:Math.round(clamp(progress,0,1)*400);
   const service = Math.round((stats.picked + stats.delivered * 2) / (totalRiders * 3) * 300);
   const time = stats.completed ? Math.round(clamp(stats.remaining * 2, 0, 100)) : 0;
   const safety = Math.max(0, Math.round(200 - stats.safetyPenalty - stats.overspeed * 2 - stats.doorViolations * 40 - stats.resets * 30));
   const total = route + service + time + safety;
   let grade = total >= 900 ? 'S' : total >= 800 ? 'A' : total >= 650 ? 'B' : total >= 500 ? 'C' : 'D';
-  if (grade === 'S' && (stats.delivered < Math.ceil(totalRiders * .8) || stats.people || stats.doorViolations)) grade = 'A';
-  if (!stats.completed) grade = 'D';
-  return { total, grade, route, service, time, safety };
+  if (grade === 'S' && (stats.delivered < Math.ceil(totalRiders * .8) || stats.people || stats.doorViolations || stats.redLights)) grade = 'A';
+  if (!stats.completed&&progress===undefined) grade = 'D';
+  const next=[500,650,800,900].find(n=>n>total);
+  return { total, grade, route, service, time, safety, next:next?next-total:0 };
 }
-export type Controls = { throttle: number; steer: number; handbrake: boolean };
+export function freeRunSuccess(stats:Stats,totalRiders=10){return stats.completed&&stats.remaining>0&&stats.delivered===totalRiders&&stats.picked===totalRiders&&stats.missed===0;}
+export type Controls = { throttle: number; steer: number; handbrake: boolean; reverse?:boolean };
 export type DriveState = V2 & { speed: number; heading: number };
 export function driveStep(state: DriveState, input: Controls, dt: number, health: number, offroad = false): DriveState {
   let speed = state.speed;
   const max = (health < 35 ? 23 : 31) * (offroad ? .48 : 1);
   if (input.throttle > 0) speed += (speed < 0 ? 11 : 6.8 * (1 - Math.max(0, speed) / (max + 8))) * dt;
-  else if (input.throttle < 0) speed -= (speed > .4 ? 14 : 3.8) * dt;
+  else if (input.throttle < 0) speed = speed>0?Math.max(0,speed-34*dt):input.reverse===false?0:speed-3.8*dt;
   else speed *= Math.exp(-.28 * dt);
-  if (input.handbrake) speed *= Math.exp(-3.1 * dt);
+  if (input.handbrake) speed = Math.sign(speed)*Math.max(0,Math.abs(speed)-48*dt);
   speed = clamp(speed, -5, max);
   if (Math.abs(speed) < .04) speed = 0;
   const steerRate = 1.65 / (1 + Math.abs(speed) * .032) * Math.min(1, Math.abs(speed) / 3);
