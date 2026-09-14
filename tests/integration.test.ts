@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { headlessGame,stepSeconds,disposeGame } from './harness';
+import { DEMO_SEED } from '../src/demo';
 
 test('boarding, closing doors, unsafe door episodes, pausing and timeout use actual game state',async()=>{
   const g=await headlessGame();const stop=g.trip.stops[0];g.state={...stop,speed:0};g.physics.teleport(g.state);
@@ -27,4 +28,19 @@ test('moving away interrupts boarding, overspeed accumulates, and recovery costs
 test('waiting passengers can be hit, hits cannot be farmed, and new runs reset damage and riders',async()=>{
   const g=await headlessGame();g.onHit({kind:'person',id:100},15);assert.equal(g.stats.people,1);assert.equal(g.trip.riders[0].state,'missed');g.time+=2;g.onHit({kind:'person',id:100},15);assert.equal(g.stats.people,1);
   g.makeTrip(42);assert.equal(g.stats.people,0);assert.equal(g.health,100);assert.equal(g.trip.riders.filter(r=>r.state==='waiting').length,10);assert.equal(g.riderHit.size,0);disposeGame(g);
+});
+test('production demonstration entry completes the countdown and whole timed route with traffic',async()=>{
+  const g=await headlessGame(DEMO_SEED,true);let finished=0,markedDemo=false;
+  g.audio.unlock=async()=>{};g.qa=false;g.qaSpeed=4;g.time=500;
+  g.demoRecorder={busy:true,finished:()=>finished++} as any;
+  g.ui.results=(_stats,_seed,_reason,demo)=>{markedDemo=!!demo;};
+  await g.start(DEMO_SEED,true);
+  assert.equal(g.mode,'countdown');assert.equal(g.demoRun,true);assert.equal(g.qaSpeed,1);assert.equal(g.time,0);
+  for(let frame=0;frame<60*184&&String(g.mode)!=='results';frame++)g.step(1/60);
+  assert.equal(g.mode,'results');assert.equal(g.stats.completed,true);assert.equal(g.stats.delivered,10);
+  assert.equal(g.stats.overspeed,0);assert.equal(g.stats.doorViolations,0);assert.equal(g.stats.resets,0);
+  assert.equal(g.checkIndex,g.checks.length);assert.equal(finished,1);assert.equal(markedDemo,true);
+  assert.ok(g.stats.remaining>0&&g.stats.remaining<180);
+  console.log('Production demo:',JSON.stringify({remaining:g.stats.remaining,delivered:g.stats.delivered,people:g.stats.people,cars:g.stats.cars,objects:g.stats.objects}));
+  disposeGame(g);
 });

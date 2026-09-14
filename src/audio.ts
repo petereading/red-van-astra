@@ -3,6 +3,7 @@ type VoiceKey = 'welcome' | 'dropoff' | 'slow' | 'crash' | 'thanks' | 'door';
 const phrases: Record<VoiceKey,string> = {welcome:'師傅，唔該！',dropoff:'前面有落，唔該！',slow:'師傅，慢啲呀！',crash:'嘩！小心啲呀！',thanks:'唔該晒！',door:'師傅，未閂門呀！'};
 export class GameAudio {
   context?: AudioContext; music?: GainNode; sfx?: GainNode; voice?: GainNode;
+  master?: DynamicsCompressorNode; recording=false; voicesReady:Promise<unknown>=Promise.resolve();
   engine?: OscillatorNode; engine2?: OscillatorNode; engineGain?: GainNode;
   noise?: AudioBuffer; step=0; nextBeat=0; playing=false; alarmAt=0; lastVoice=-10;
   values={music:.42,sfx:.72,voice:.80}; buffers=new Map<VoiceKey,AudioBuffer>();
@@ -10,7 +11,7 @@ export class GameAudio {
     if(!this.context) {
       const Ctor=window.AudioContext || (window as unknown as {webkitAudioContext:typeof AudioContext}).webkitAudioContext;
       this.context=new Ctor(); const c=this.context;
-      const master=c.createDynamicsCompressor();master.threshold.value=-12;master.ratio.value=4;master.connect(c.destination);
+      const master=c.createDynamicsCompressor();this.master=master;master.threshold.value=-12;master.ratio.value=4;master.connect(c.destination);
       this.music=c.createGain();this.sfx=c.createGain();this.voice=c.createGain();
       this.music.connect(master);this.sfx.connect(master);this.voice.connect(master);
       this.engineGain=c.createGain();this.engineGain.gain.value=0;
@@ -18,12 +19,18 @@ export class GameAudio {
       this.engine=c.createOscillator();this.engine.type='sawtooth';this.engine.frequency.value=42;this.engine.connect(this.engineGain);this.engine.start();
       this.engine2=c.createOscillator();this.engine2.type='triangle';this.engine2.frequency.value=84;this.engine2.connect(this.engineGain);this.engine2.start();
       this.noise=c.createBuffer(1,c.sampleRate,c.sampleRate);const n=this.noise.getChannelData(0);for(let i=0;i<n.length;i++)n[i]=Math.random()*2-1;
-      for(const key of Object.keys(phrases) as VoiceKey[]) fetch(`/audio/${key}.wav`).then(r=>r.ok?r.arrayBuffer():Promise.reject()).then(b=>c.decodeAudioData(b)).then(b=>this.buffers.set(key,b)).catch(()=>{});
+      this.voicesReady=Promise.all((Object.keys(phrases) as VoiceKey[]).map(key=>fetch(`/audio/${key}.wav`).then(r=>r.ok?r.arrayBuffer():Promise.reject()).then(b=>c.decodeAudioData(b)).then(b=>this.buffers.set(key,b)).catch(()=>{})));
       this.setLevels(this.values);
     }
     await this.context.resume();this.nextBeat=this.context.currentTime+.05;
   }
   setLevels(v:typeof this.values){this.values=v;if(this.music)this.music.gain.value=v.music*.3;if(this.sfx)this.sfx.gain.value=v.sfx;if(this.voice)this.voice.gain.value=v.voice;}
+  recordingSource(){
+    if(!this.context||!this.master)throw new Error('遊戲聲音尚未啟動');
+    const destination=this.context.createMediaStreamDestination(),master=this.master;
+    master.connect(destination);this.recording=true;
+    return{stream:destination.stream,release:()=>{master.disconnect(destination);destination.stream.getTracks().forEach(t=>t.stop());this.recording=false;}};
+  }
   tone(freq:number,time:number,duration:number,volume:number,type:OscillatorType='sine',bus=this.sfx,end?:number){
     if(!this.context||!bus)return;const c=this.context,o=c.createOscillator(),g=c.createGain();o.type=type;o.frequency.setValueAtTime(freq,time);if(end)o.frequency.exponentialRampToValueAtTime(Math.max(20,end),time+duration);g.gain.setValueAtTime(.0001,time);g.gain.exponentialRampToValueAtTime(Math.max(.001,volume),time+.008);g.gain.exponentialRampToValueAtTime(.0001,time+duration);o.connect(g);g.connect(bus);o.start(time);o.stop(time+duration+.01);
   }
@@ -57,7 +64,7 @@ export class GameAudio {
   }
   say(key:VoiceKey,force=false){const c=this.context;if(!c||(!force&&c.currentTime-this.lastVoice<5))return;this.lastVoice=c.currentTime;
     const buffer=this.buffers.get(key);if(buffer){const s=c.createBufferSource();s.buffer=buffer;s.connect(this.voice!);s.start();return;}
-    if('speechSynthesis'in window){const voices=speechSynthesis.getVoices(),v=voices.find(v=>/zh[-_]HK|yue/i.test(v.lang));if(v){const u=new SpeechSynthesisUtterance(phrases[key]);u.voice=v;u.lang='zh-HK';u.rate=1.08;u.volume=this.values.voice;speechSynthesis.cancel();speechSynthesis.speak(u);return;}}
+    if(!this.recording&&'speechSynthesis'in window){const voices=speechSynthesis.getVoices(),v=voices.find(v=>/zh[-_]HK|yue/i.test(v.lang));if(v){const u=new SpeechSynthesisUtterance(phrases[key]);u.voice=v;u.lang='zh-HK';u.rate=1.08;u.volume=this.values.voice;speechSynthesis.cancel();speechSynthesis.speak(u);return;}}
     // Always provide a vocal-like surprise even if device speech is unavailable.
     this.tone(370,c.currentTime,.32,.10,'sawtooth',this.voice,740);this.tone(610,c.currentTime+.06,.27,.06,'triangle',this.voice,280);
   }

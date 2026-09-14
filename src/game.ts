@@ -5,6 +5,7 @@ import { City,makePerson,animatePerson,makeStop,makeVehicle,disposeModel,type Pe
 import { Physics,type HitTarget } from './physics';
 import { GameAudio } from './audio';
 import { UI } from './ui';
+import { DemoRecorder,DEMO_SEED } from './demo';
 
 type Traffic={s:number;speed:number;direction:number;lane:number;model:VehicleModel;body:RAPIER.RigidBody;hitUntil:number};
 type Pedestrian={s:number;lateral:number;offset?:number;person:PersonModel;body:RAPIER.RigidBody;hit:boolean;cross:boolean;phase:number};
@@ -20,7 +21,7 @@ export class Game {
   progress=0;checkIndex=0;checks:number[]=[];hitCooldown=new Map<string,number>();toastUntil=0;flash=0;dropAnnounced=new Set<number>();
   menuTime=0;cameraLook=new T.Vector3();cameraPos=new T.Vector3();cameraReady=false;smoke:T.InstancedMesh;smokeDummy=new T.Object3D();
   qa=import.meta.env.DEV&&new URLSearchParams(location.search).get('qa')==='1';autopilot=false;pilotStop=-1;pilotServed=new Set<number>();qaSpeed=1;qaTraffic=true;fps=60;fpsTime=0;frames=0;
-  sun:T.DirectionalLight;
+  sun:T.DirectionalLight;demoRun=false;demoRecorder?:DemoRecorder;
   constructor(){
     this.renderer=new T.WebGLRenderer({antialias:true,powerPreference:'high-performance'});this.renderer.outputColorSpace=T.SRGBColorSpace;this.renderer.toneMapping=T.ACESFilmicToneMapping;this.renderer.toneMappingExposure=1.35;
     this.renderer.setClearColor('#8faaa8');this.renderer.shadowMap.enabled=true;this.renderer.shadowMap.type=T.PCFSoftShadowMap;
@@ -29,6 +30,7 @@ export class Game {
     this.sun=new T.DirectionalLight('#ffd5a2',2.3);this.sun.position.set(-40,85,35);this.sun.castShadow=true;this.sun.shadow.mapSize.set(1024,1024);this.sun.shadow.camera.left=-35;this.sun.shadow.camera.right=35;this.sun.shadow.camera.top=35;this.sun.shadow.camera.bottom=-35;this.sun.shadow.camera.far=190;this.sun.shadow.bias=-.001;this.scene.add(this.sun);this.scene.add(this.sun.target);
     this.scene.add(this.van.group);
     const smokeMat=new T.MeshBasicMaterial({color:'#455656',transparent:true,opacity:.25,depthWrite:false});this.smoke=new T.InstancedMesh(new T.SphereGeometry(1,7,5),smokeMat,12);this.smoke.visible=false;this.scene.add(this.smoke);
+    this.demoRecorder=new DemoRecorder(this.ui,this.audio,{start:()=>this.start(DEMO_SEED,true),stop:()=>{if(this.mode!=='results')this.menu();}});
     this.bind();this.resize();this.applySettings();this.ui.setMode('menu');
   }
   async init(){
@@ -40,9 +42,9 @@ export class Game {
     this.makeTrip(1986);this.ui.ready();if(this.qa)this.makeQa();requestAnimationFrame(t=>this.frame(t));
   }
   bind(){
-    this.ui.onStart=()=>void this.start();this.ui.onResume=()=>void this.resume();this.ui.onPause=()=>this.pause();this.ui.onMenu=()=>this.menu();this.ui.onDoor=()=>this.toggleDoor();this.ui.onSettings=()=>this.applySettings();
+    this.ui.onStart=()=>void this.start();this.ui.onResume=()=>void this.resume();this.ui.onPause=()=>this.pause();this.ui.onMenu=()=>{if(this.demoRecorder?.busy)this.demoRecorder.stop('示範已停止；影片保留已錄下的部分。');else this.menu();};this.ui.onDoor=()=>{if(!this.demoRecorder?.busy)this.toggleDoor();};this.ui.onSettings=()=>this.applySettings();
     addEventListener('resize',()=>this.resize());
-    addEventListener('keydown',e=>{if((e.target as HTMLElement).matches('input,select'))return;if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key))e.preventDefault();const key=e.key.toLowerCase();this.keys.add(key);if(e.repeat)return;if(key==='e')this.toggleDoor();if(key==='r')this.resetVan();if(key==='h'&&this.mode==='playing')this.audio.effect('horn');if(key==='escape'){if(this.mode==='playing'||this.mode==='countdown')this.pause();else if(this.mode==='paused')void this.resume();} });
+    addEventListener('keydown',e=>{if((e.target as HTMLElement).matches('input,select'))return;if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key))e.preventDefault();const key=e.key.toLowerCase();if(this.demoRecorder?.busy&&key!=='escape')return;this.keys.add(key);if(e.repeat)return;if(key==='e')this.toggleDoor();if(key==='r')this.resetVan();if(key==='h'&&this.mode==='playing')this.audio.effect('horn');if(key==='escape'){if(this.mode==='playing'||this.mode==='countdown')this.pause();else if(this.mode==='paused')void this.resume();} });
     addEventListener('keyup',e=>this.keys.delete(e.key.toLowerCase()));
     addEventListener('blur',()=>{this.keys.clear();this.touch.clear();if(this.mode==='playing'||this.mode==='countdown')this.pause();});
     document.addEventListener('visibilitychange',()=>{if(document.hidden&&(this.mode==='playing'||this.mode==='countdown'))this.pause();});
@@ -73,13 +75,16 @@ export class Game {
     }
     this.cameraReady=false;this.animateVehicles(0);this.updateHud();
   }
-  async start(seed?:number){
-    await this.audio.unlock();this.keys.clear();this.touch.clear();this.autopilot=false;
+  async start(seed?:number,demo=false){
+    if(this.demoRecorder?.busy&&!demo)return;
+    await this.audio.unlock();if(demo&&!this.demoRecorder?.busy)return;
+    this.keys.clear();this.touch.clear();this.demoRun=demo;this.autopilot=demo;
+    if(demo){this.qaSpeed=1;this.qaTraffic=true;this.time=0;}
     this.makeTrip(seed??crypto.getRandomValues(new Uint32Array(1))[0]);this.mode='countdown';this.count=3;this.lastCount=4;this.accumulator=0;this.ui.setMode('countdown');this.ui.show('countdown');this.toastUntil=0;this.ui.hide('toast');this.ui.hide('help');this.ui.hide('settings');this.ui.hide('credits');
   }
   pause(){if(this.mode!=='playing'&&this.mode!=='countdown')return;this.mode='paused';this.ui.setMode('paused');this.keys.clear();this.touch.clear();this.audio.pause();}
   async resume(){if(this.mode!=='paused')return;await this.audio.unlock();this.mode=this.count>0?'countdown':'playing';this.ui.setMode(this.mode);this.keys.clear();this.touch.clear();}
-  menu(){this.mode='menu';this.autopilot=false;this.ui.setMode('menu');this.ui.hide('settings');this.ui.hide('countdown');this.ui.hide('toast');this.audio.pause();this.state={x:-7,z:32,speed:0,heading:0};this.van.group.position.set(-7,0,32);this.van.group.rotation.set(0,0,0);this.cameraReady=false;}
+  menu(){this.mode='menu';this.autopilot=false;this.demoRun=false;this.ui.setMode('menu');this.ui.hide('settings');this.ui.hide('countdown');this.ui.hide('toast');this.audio.pause();this.state={x:-7,z:32,speed:0,heading:0};this.van.group.position.set(-7,0,32);this.van.group.rotation.set(0,0,0);this.cameraReady=false;}
   toast(text:string,bad=false,duration=2.5){this.ui.text('toast',text);this.ui.el('toast').classList.toggle('bad',bad);this.ui.show('toast');this.toastUntil=this.time+duration;}
   toggleDoor(){if(this.mode!=='playing'||this.doorAmount>.02&&this.doorAmount<.98)return;this.doorOpen=!this.doorOpen;this.serviceClock=0;this.audio.effect('door');if(this.doorOpen&&Math.abs(this.state.speed)>.35&&!this.unsafeDoor){this.stats.doorViolations++;this.unsafeDoor=true;this.audio.say('door',true);this.toast('未停妥開門！駕駛分 −40',true);} }
   resetVan(){if(this.mode!=='playing')return;const s=this.checkIndex?this.checks[this.checkIndex-1]:8;const p=onRoute(Math.max(8,s-8),7);this.state={...p,speed:0};this.physics.teleport(this.state);this.stats.remaining=Math.max(0,this.stats.remaining-5);this.stats.resets++;this.doorOpen=false;this.doorAmount=0;this.unsafeDoor=false;this.cameraReady=false;this.toast('已返回安全路面 · −5 秒／駕駛分 −30',true);}
@@ -191,7 +196,7 @@ export class Game {
     this.audio.tick(this.state.speed,input.throttle,input.throttle<0||input.handbrake,this.stats.remaining,true);
     if(Math.hypot(this.state.x,this.state.z)>2000)this.resetVan();
   }
-  finish(reason:string){if(this.mode!=='playing')return;this.mode='results';this.autopilot=false;this.ui.hide('countdown');this.ui.hide('toast');this.audio.tick(0,0,false,0,false);this.audio.effect('finish');this.ui.results(this.stats,this.trip.seed,reason);}
+  finish(reason:string){if(this.mode!=='playing')return;this.mode='results';this.autopilot=false;this.ui.hide('countdown');this.ui.hide('toast');this.audio.tick(0,0,false,0,false);this.audio.effect('finish');this.ui.results(this.stats,this.trip.seed,reason,this.demoRun);if(this.demoRun)this.demoRecorder?.finished();}
   frame(now:number){
     const raw=this.last?(now-this.last)/1000:1/60;this.last=now;const dt=Math.min(raw,.12);this.accumulator+=dt*(this.qa?this.qaSpeed:1);
     let steps=0;while(this.accumulator>=1/60&&steps<30){this.step(1/60);this.accumulator-=1/60;steps++;}if(steps===30)this.accumulator=0;
