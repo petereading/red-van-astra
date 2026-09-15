@@ -1,6 +1,8 @@
 import * as T from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { surface } from './surfaces';
+import { nearSideRoad, roadDistance } from './roads';
+import { addDistricts } from './streetscape';
 import { CROSSINGS,trafficPoint,type Signal } from './traffic';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { CUMULATIVE, LENGTHS, ROUTE, STREETS, TOTAL_LENGTH, onRoute, random, STOP_HALF_LENGTH, STOP_HALF_WIDTH, type Stop, type V2 } from './core';
@@ -17,30 +19,53 @@ const roundedCache=new Map<string,T.BufferGeometry>();
 function roundedBox(parent:T.Object3D,color:string,x:number,y:number,z:number,w:number,h:number,d:number,r=.12){const key=[w,h,d,r].join('/');if(!roundedCache.has(key))roundedCache.set(key,new RoundedBoxGeometry(w,h,d,3,Math.min(r,w/4,h/4,d/4)));const mesh=new T.Mesh(roundedCache.get(key)!,material(color));mesh.position.set(x,y,z);parent.add(mesh);return mesh;}
 const cube = new T.BoxGeometry(1, 1, 1);
 export function disposeModel(root:T.Object3D){const seen=new Set<T.BufferGeometry>();root.traverse(o=>{if(o instanceof T.Mesh&&o.geometry!==cube&&![...roundedCache.values()].includes(o.geometry)&&!seen.has(o.geometry)){seen.add(o.geometry);o.geometry.dispose();}});}
+function batchProp(root:T.Object3D){
+  root.updateMatrixWorld(true);const inverse=root.matrixWorld.clone().invert(),parts=new Map<T.Material,T.BufferGeometry[]>();
+  root.traverse(o=>{if(o instanceof T.Mesh&&!Array.isArray(o.material)){const geo=o.geometry.clone().applyMatrix4(new T.Matrix4().multiplyMatrices(inverse,o.matrixWorld));if(!parts.has(o.material))parts.set(o.material,[]);parts.get(o.material)!.push(geo);}});
+  disposeModel(root);root.clear();for(const [mat,geos]of parts){const geometry=mergeGeometries(geos);geos.forEach(g=>g.dispose());if(!geometry)continue;const m=new T.Mesh(geometry,mat);m.castShadow=true;m.receiveShadow=true;root.add(m);}
+}
 export function box(parent: T.Object3D, color: string, x: number, y: number, z: number, w: number, h: number, d: number, glow = false) {
   const m = new T.Mesh(cube, material(color, glow)); m.position.set(x, y, z); m.scale.set(w, h, d); parent.add(m); return m;
 }
 export function cylinder(parent: T.Object3D, color: string, x: number, y: number, z: number, r: number, h: number, sides = 10) {
   const m = new T.Mesh(new T.CylinderGeometry(r, r, h, sides), material(color)); m.position.set(x, y, z); parent.add(m); return m;
 }
-const textCache = new Map<string, T.MeshBasicMaterial>();
+const textCache = new Map<string, T.MeshStandardMaterial>();
+let nightMaterials=false;
+export function setNightMaterials(night:boolean){
+  nightMaterials=night;
+  for(const [key,m]of materials){if(key.startsWith('#d9c88e')){m.emissive.set('#ffd699');m.emissiveIntensity=night?1.35:0;}if(key.startsWith('#fff0b1'))m.emissiveIntensity=night?3:.3;}
+  for(const [key,m]of textCache){const lit=key.includes('neon')||key.includes('pawn')||key.includes('modern');m.emissiveIntensity=night?(lit?1.9:.13):(lit?.26:.02);}
+}
 export function sign(text: string, sub: string, bg: string, fg: string, w: number, h: number, style='classic') {
   const key = [text, sub, bg, fg,style].join('|');
   if (!textCache.has(key)) {
-    const canvas = document.createElement('canvas'); canvas.width = style==='vertical'?256:768; canvas.height = style==='vertical'?768:256;
+    const canvas = document.createElement('canvas'); canvas.width = style==='vertical'?256:style==='bus-band'?1600:768; canvas.height = style==='vertical'?768:style==='bus-band'?128:256;
     const c = canvas.getContext('2d')!,cw=canvas.width,ch=canvas.height;c.fillStyle=bg;c.fillRect(0,0,cw,ch);
     c.strokeStyle=fg;c.lineWidth=style==='modern'?2:5;c.strokeRect(9,9,cw-18,ch-18);
-    if(style==='neon'){c.fillStyle='#101c22';c.fillRect(17,17,cw-34,ch-34);c.shadowColor=fg;c.shadowBlur=13;}
+    const neon=style.includes('neon')||style==='pawn';
+    if(neon){c.fillStyle='#101c22';c.fillRect(17,17,cw-34,ch-34);c.shadowColor=fg;c.shadowBlur=16;c.lineWidth=4;c.strokeStyle=fg;c.strokeRect(18,18,cw-36,ch-36);c.strokeRect(28,28,cw-56,ch-56);}
     c.fillStyle=fg;c.textAlign='center';c.textBaseline='middle';
     if(style==='vertical'){const letters=[...text].slice(0,5);c.font='900 116px "Noto Sans TC",sans-serif';letters.forEach((letter,i)=>c.fillText(letter,cw/2,75+i*(610/Math.max(1,letters.length-1)),220));}
-    else{c.font=`${style==='modern'?500:900} ${text.length>7?72:96}px "Noto Sans TC",sans-serif`;c.fillText(text,cw/2,sub?103:128,cw-60);c.shadowBlur=0;if(sub){c.font='600 25px Arial';c.fillText(sub,cw/2,204,cw-52);}}
+    else if(style==='bus-band'){c.font='700 57px "Noto Sans TC",sans-serif';c.fillText(text,cw/2,64,cw-44);}
+    else{
+      const icon=style.includes('-tea')||style.includes('-noodles')||style.includes('-record')||style==='pawn'||style==='bus-stop';
+      if(icon){c.save();c.translate(103,109);c.strokeStyle=fg;c.lineWidth=5;
+        if(style==='bus-stop'){c.strokeRect(-45,-40,90,72);c.strokeRect(-35,-30,70,32);for(const x of [-29,29]){c.beginPath();c.arc(x,33,10,0,Math.PI*2);c.fill();c.fillRect(x-6,12,12,8);}c.beginPath();c.moveTo(0,-30);c.lineTo(0,2);c.stroke();}
+        else if(style.includes('tea')){c.strokeRect(-36,-24,61,49);c.beginPath();c.arc(30,0,20,-Math.PI/2,Math.PI/2);c.moveTo(-40,35);c.lineTo(38,35);for(const x of [-18,3]){c.moveTo(x,-38);c.bezierCurveTo(x-14,-48,x+14,-56,x,-66);}c.stroke();}
+        else if(style.includes('record')){for(const r of [47,37,24,7]){c.beginPath();c.arc(0,0,r,0,Math.PI*2);c.stroke();}}
+        else if(style==='pawn'){c.beginPath();c.moveTo(-49,-26);c.lineTo(-31,-47);c.lineTo(0,-33);c.lineTo(31,-47);c.lineTo(49,-26);c.lineTo(34,36);c.lineTo(-34,36);c.closePath();c.stroke();c.font='700 49px "Noto Sans TC"';c.fillText('押',0,0);}
+        else{c.beginPath();c.ellipse(0,-4,44,13,0,0,Math.PI*2);c.moveTo(-44,-4);c.quadraticCurveTo(-30,50,0,41);c.quadraticCurveTo(30,50,44,-4);c.moveTo(-26,-32);c.lineTo(40,-58);c.moveTo(-20,-24);c.lineTo(44,-48);c.stroke();}c.restore();
+      }
+      c.font=`700 ${text.length>7?72:96}px "Noto Sans TC",sans-serif`;c.fillText(text,icon?cw*.60:cw/2,sub?103:128,cw-(icon?245:60));c.shadowBlur=0;if(sub){c.font='700 25px "Noto Sans TC",Arial';c.fillText(sub,cw/2,204,cw-52);}
+    }
     if(style==='classic'){const rng=random(text.charCodeAt(0));for(let i=0;i<80;i++){c.fillStyle=`rgba(35,31,22,${rng()*.12})`;c.fillRect(rng()*cw,rng()*ch,1+rng()*20,1+rng()*3);}}
     const texture = new T.CanvasTexture(canvas); texture.colorSpace = T.SRGBColorSpace;
-    textCache.set(key, new T.MeshBasicMaterial({ map: texture, side: T.DoubleSide }));
+    const lit=neon||style==='modern';textCache.set(key, new T.MeshStandardMaterial({map:texture,emissiveMap:texture,emissive:'#ffffff',emissiveIntensity:nightMaterials?(lit?1.9:.13):(lit?.26:.02),roughness:.62,side:T.DoubleSide}));
   }
   return new T.Mesh(new T.PlaneGeometry(w, h), textCache.get(key)!);
 }
-export type VehicleModel = { group: T.Group; wheels: T.Object3D[]; door?: T.Group; brake: T.Mesh[] };
+export type VehicleModel = { group: T.Group; wheels: T.Object3D[]; door?: T.Group; brake: T.Mesh[]; ads?:T.Group };
 export function makeVehicle(type: 'minibus' | 'taxi' | 'car' | 'van' | 'bus', color = '#c52634'): VehicleModel {
   const g = new T.Group(), wheels: T.Object3D[] = [], brakes: T.Mesh[] = [];
   const mb = type === 'minibus', big = type === 'bus';
@@ -85,7 +110,7 @@ export function makeVehicle(type: 'minibus' | 'taxi' | 'car' | 'van' | 'bus', co
       g.add(wheel); wheels.push(wheel);
     }
   }
-  let door: T.Group | undefined;
+  let door: T.Group | undefined,ads:T.Group|undefined;
   if (mb) {
     door = new T.Group(); door.position.set(-1.13, 1.58, -2.1);
     box(door, '#ead7b0', 0, 0, 0, .1, 2.01, 1.06);
@@ -96,7 +121,14 @@ export function makeVehicle(type: 'minibus' | 'taxi' | 'car' | 'van' | 'bus', co
     route.position.set(0, 2.87, -3.235); route.rotation.y = Math.PI; g.add(route);
     const backRoute = sign('旺 角', 'MONG KOK', '#fae9bc', '#ab202d', 1.53, .5); backRoute.position.set(0, 2.02, 3.23); g.add(backRoute);
     const plate = sign('LV 1986', '', '#f3ce56', '#172c30', .68, .21); plate.position.set(0, .9, 3.255); g.add(plate);
-    const backText = sign('公共小型巴士', 'PUBLIC LIGHT BUS · 16 SEATS', '#ecd9af', '#6c3b27', 1.71, .38); backText.position.set(0, 1.31, 3.245); g.add(backText);
+    const backText = sign('公共小型巴士16座位', 'PUBLIC LIGHT BUS 16 SEATS', '#ecd9af', '#6c3b27', 1.78, .34); backText.position.set(0, 1.42, 3.245); g.add(backText);
+    for(const side of [-1,1]){const band=sign('PUBLIC LIGHT BUS 16 SEATS 公共小型巴士16座位','','#bf202c','#fff3dc',5.65,.27,'bus-band');band.position.set(side*1.145,2.9,0);band.rotation.y=side*Math.PI/2;g.add(band);}
+    ads=new T.Group();g.add(ads);
+    const rearAd=sign('紅Van茶餐廳','','#235e57','#ffe2a4',1.72,.22,'icon-tea');rearAd.position.set(0,1.14,3.28);ads.add(rearAd);
+    for(const side of [-1,1]){const ad=sign('九龍好味道','街坊茶餐廳 · MILK TEA','#f2cb62','#286053',3.75,.46,'icon-tea');ad.position.set(side*1.16,1.38,.5);ad.rotation.y=side*Math.PI/2;ads.add(ad);}ads.visible=false;
+    const frontPlate=sign('LV 1986','','#f3eee1','#182d31',.67,.20);frontPlate.position.set(0,.66,-3.27);frontPlate.rotation.y=Math.PI;g.add(frontPlate);
+    const destinationHousing=roundedBox(g,'#b51f2b',0,3.04,-2.65,1.82,.6,.66,.17);
+    const destination=sign('深水埗 → 旺角','$12','#163f31','#faf0bd',1.67,.43);destination.position.set(0,3.06,-2.99);destination.rotation.y=Math.PI;g.add(destination);
     roundedBox(g,'#aead9f',0,3.12,.6,1.3,.25,1.8,.1);
     for(let z=-.1;z<1.3;z+=.18)box(g,'#626e70',0,3.255,z,1.04,.015,.045);
     for(const side of [-1,1]){for(let z=-1.2;z<2.5;z+=1.18){box(g,'#d8d9d0',side*1.135,2.06,z,.045,.025,1.02);box(g,'#c2c1b3',side*1.14,2.24,z-.5,.045,.87,.035);}box(g,'#c9c4ad',side*1.12,1.56,.6,.035,.024,4.6);box(g,'#b0a893',side*1.12,.86,.4,.035,.024,5.1);}
@@ -109,7 +141,7 @@ export function makeVehicle(type: 'minibus' | 'taxi' | 'car' | 'van' | 'bus', co
     for (const x of [-.65, .65]) { const w = box(g, '#0d252f', x, 2.01, -3.255, .035, .54, .028); w.rotation.z = .27; }
   }
   g.traverse(o => { if (o instanceof T.Mesh) { o.castShadow = true; o.receiveShadow = true; } });
-  return { group: g, wheels, door, brake: brakes };
+  return { group: g, wheels, door, brake: brakes, ads };
 }
 
 export type PersonModel = { group: T.Group; arm: T.Group; legs: T.Group[]; seed: number };
@@ -133,11 +165,11 @@ export function animatePerson(p: PersonModel, time: number, wave: boolean, walk:
   p.legs.forEach((l, i) => l.rotation.x = Math.sin(time * 8 + i * Math.PI + p.seed) * (walk ? .45 : 0));
 }
 
-export type Obstacle = { x: number; z: number; hx: number; hz: number; heading: number; kind: 'object' | 'building'; group?: T.Object3D; knocked?: boolean };
+export type Obstacle = { x: number; z: number; hx: number; hz: number; heading: number; kind: 'object' | 'building'; group?: T.Object3D; knocked?: boolean; vx?:number;vz?:number;vy?:number;age?:number;homeRotation?:T.Euler;homeY?:number };
 export class City {
   group = new T.Group(); obstacles: Obstacle[] = []; lamps: T.Object3D[] = []; signalModels:{s:number;red:T.MeshStandardMaterial;amber:T.MeshStandardMaterial;green:T.MeshStandardMaterial}[]=[];
   batches = new Map<string, T.BufferGeometry[]>();
-  constructor() { this.build(); }
+  constructor() { this.build();for(const o of this.obstacles)if(o.group){o.homeRotation=o.group.rotation.clone();o.homeY=o.group.position.y;} }
   add(color: string, x: number, y: number, z: number, w: number, h: number, d: number, rotation = 0) {
     const geo = new T.BoxGeometry(w, h, d);if(color.startsWith('@')){const uv=geo.getAttribute('uv');for(let n=0;n<uv.count;n++)uv.setXY(n,uv.getX(n)*Math.max(w,d)/3,uv.getY(n)*Math.max(h,Math.min(w,d))/3);}
     geo.rotateY(rotation); geo.translate(x, y, z);
@@ -146,10 +178,11 @@ export class City {
   build() {
     const rng = random(8521986);
     this.add('#3e5556', 80, -.36, -370, 1150, .5, 1450);
+    addDistricts(this);
     // The actual street surface is geometry, with kerbs and markings in world units.
     for (let i = 0; i < LENGTHS.length; i++) {
       const s = CUMULATIVE[i], len = LENGTHS[i], p = onRoute(s + len / 2), h = -p.heading;
-      this.add('@pavers', p.x, -.015, p.z, 36, .2, len + 34, h);
+      this.add(i%3===0?'@redbrick:#b47762':i%3===1?'@concrete:#c5c0ad':'@pavers:#cdc8b5', p.x, -.015, p.z, 36, .2, len + 34, h);
     }
     for (let i = 0; i < LENGTHS.length; i++) {
       const s = CUMULATIVE[i], len = LENGTHS[i], p = onRoute(s + len / 2), h = -p.heading;
@@ -160,9 +193,9 @@ export class City {
       }
       for (const side of [-1, 1]) {
         for (let d = s + 17; d < s + len - 17; d += 5) {
-          const p = onRoute(d, side * 11.4); this.add('#e6bd4d', p.x, .15, p.z, .10, .025, 4.9, h);
+          const p = onRoute(d, side * 11.4); if(nearSideRoad(p,13))continue;this.add('#e6bd4d', p.x, .15, p.z, .10, .025, 4.9, h);
           const p2 = onRoute(d, side * 10.95); this.add('#e6bd4d', p2.x, .15, p2.z, .10, .025, 4.9, h);
-          const curb = onRoute(d, side * 11.9); this.add(d % 10 < 5 ? '#afb8aa' : '#73817b', curb.x, .23, curb.z, .45, .24, 4.95, h);
+          for(let n=0;n<5;n++){const curb=onRoute(d+n-2,side*11.9);this.add('@stone:#b5b8ad',curb.x,.22,curb.z,.34,.19,.98,h);}const gutter=onRoute(d,side*11.65);this.add('#647572',gutter.x,.155,gutter.z,.25,.025,.6,h);
         }
       }
       for (const dist of [s + 19, s + len - 19]) {
@@ -170,7 +203,7 @@ export class City {
       }
       for (let d = s + 28; d < s + len - 24; d += 25) {
         for (const side of [-1, 1]) {
-          const p = onRoute(d, side * 13.1); const g = new T.Group(); g.position.set(p.x, .14, p.z); g.rotation.y = h;
+          const p = onRoute(d, side * 13.1);if(nearSideRoad(p,14))continue; const g = new T.Group(); g.position.set(p.x, .14, p.z); g.rotation.y = h;
           cylinder(g, '#525f5d', 0, 3.6, 0, .10, 7.2, 8);
           box(g, '#667773', -side * 1.1, 7.15, 0, 2.3, .12, .14);
           box(g, '#fff0b1', -side * 2.15, 7.08, 0, .74, .10, .40, true);
@@ -179,6 +212,7 @@ export class City {
       }
       for (let d = s + 36; d < s + len - 28; d += 24) {
         const side = rng() > .5 ? 1 : -1, p = onRoute(d, side * 13.3);
+        if(nearSideRoad(p,14))continue;
         const bin = new T.Group(); bin.position.set(p.x, .14, p.z); bin.rotation.y = h;
         cylinder(bin, '#e78027', 0, .65, 0, .39, 1.3); cylinder(bin, '#ed913e', 0, 1.36, 0, .42, .13);
         box(bin, '#152b2e', 0, 1.1, -.377, .46, .28, .035); this.group.add(bin);
@@ -188,19 +222,24 @@ export class City {
         // Leave generous pavement openings at all possible passenger positions.
         if ([100,285,475,675,880,1080,1170,1340,TOTAL_LENGTH-12,...CROSSINGS].some(v => Math.abs(d - v) < 30)) continue;
         for (const side of [-1, 1]) {
-          const p = onRoute(d, side * 12); const rail = new T.Group(); rail.position.set(p.x, .14, p.z); rail.rotation.y = h;
+          const p = onRoute(d, side * 12);if(nearSideRoad(p,15)||Math.floor(d/9)%4===0)continue; const rail = new T.Group(); rail.position.set(p.x, .14, p.z); rail.rotation.y = h;
           for (const z of [-3, 3]) box(rail, '#647a73', 0, .6, z, .075, 1.2, .09);
           for (const y of [.35, 1.08]) box(rail, '#a2aaa0', 0, y, 0, .07, .06, 6);
+          for(let z=-2.75;z<3;z+=.25)box(rail,'#89968e',0,.68,z,.045,.9,.045);
           this.group.add(rail); this.obstacles.push({ x:p.x, z:p.z, hx:.15, hz:3, heading:p.heading, kind:'object', group:rail });
         }
       }
       // Roadside buildings form varied continuous shopfronts on both sides.
       for (let d = s + 28; d < s + len - 24; d += 24) {
         for (const side of [-1, 1]) {
-          const p = onRoute(d, side * 26), bh = 14 + Math.floor(rng() * 15) * 3.1, width = 16 + rng() * 6;
+          const p = onRoute(d, side * 26),design=Math.floor(rng()*5),bh = 12 + Math.floor(rng() * (design===4?22:15)) * 3.1, width = 15 + rng() * 8;
+          if(nearSideRoad(p,29)||Math.hypot(p.x+77,p.z+557)<47||Math.hypot(p.x+63,(p.z+210)*.8)<46)continue;
           const colors=['#d1c3a7','#9ab2b0','#c5b68e','#b69587','#a7b5b8','#ddccad','#a9bcac','#d4bfae','#c4c5bc','#b6a19e'];
           const col = colors[Math.floor(rng()*colors.length)];
-          this.add((rng()>.45?'@plaster:':'@tile:')+col,p.x,bh/2,p.z,18,bh,width,h);
+          this.add(['@plaster:','@tile:','@stone:','@plaster:','@glass:'][design]+col,p.x,bh/2,p.z,18,bh,width,h);
+          if(design===3){this.add('@plaster:'+col,p.x,bh+3.5,p.z,13,7,width-4,h);this.add('#8a8d7f',p.x,bh+7.2,p.z,13.4,.4,width-3.6,h);}
+          if(design===1){const tank=new T.Mesh(new T.CylinderGeometry(1.8,1.8,3.4,14),material('#929b8f'));tank.position.set(p.x,bh+2,p.z);this.group.add(tank);}
+          if(design===4)for(let q=-width/2+.2;q<width/2;q+=2.8){const rib=onRoute(d+q,side*16.7);this.add('#b7c7c1',rib.x,bh/2,rib.z,.2,bh,.14,h);}
           this.obstacles.push({x:p.x,z:p.z,hx:9,hz:width/2,heading:p.heading,kind:'building'});
           const facade = onRoute(d, side * 16.91);
           this.add('#425655', facade.x, 2.15, facade.z, .12, 4.2, width - .35, h);
@@ -245,8 +284,9 @@ export class City {
     for(const crossing of CROSSINGS){const h=-onRoute(crossing).heading;for(let lat=-10;lat<=10;lat+=2){const p=onRoute(crossing,lat);this.add('#efe1ba',p.x,.16,p.z,1.1,.02,4.4,h);}for(const dir of [-1,1]){const p=onRoute(crossing-dir*7,dir*5.7);this.add('#eadfc9',p.x,.17,p.z,10.5,.025,.35,h);this.signalPole(crossing,dir);} }
     for(const [color,geos] of this.batches) { const mesh = new T.Mesh(mergeGeometries(geos),material(color)); mesh.receiveShadow=true;mesh.castShadow=color.startsWith('@plaster')||color.startsWith('@tile'); this.group.add(mesh); geos.forEach(g=>g.dispose()); }
     this.batches.clear();
+    for(const o of this.obstacles)if(o.group)batchProp(o.group);
     // Tall skyline blocks beyond the playable streets give the district depth.
-    for(let i=0;i<45;i++) { const x=-200+rng()*660,z=130-rng()*1050; if (this.distanceToRoad({x,z})<48) continue; const h=35+rng()*75; box(this.group,'#768c89',x,h/2,z,16+rng()*22,h,18+rng()*18); }
+    for(let i=0;i<45;i++) { const x=-260+rng()*780,z=130-rng()*1150; if (this.distanceToRoad({x,z})<64||Math.hypot(x+63,z+210)<75||Math.hypot(x+77,z+557)<75) continue; const h=35+rng()*75; box(this.group,['#768c89','#839995','#a2aaa0','#6e8587'][i%4],x,h/2,z,16+rng()*22,h,18+rng()*18); }
   }
   signalPole(s:number,side:number){
     const p=onRoute(s-side*6,side*12.7),g=new T.Group();g.position.set(p.x,.15,p.z);g.rotation.y=-p.heading+(side===1?0:Math.PI);
@@ -258,9 +298,12 @@ export class City {
   distanceToRoad(p: V2) {
     let d=Infinity;
     for(let i=0;i<LENGTHS.length;i++){ const a=ROUTE[i],b=ROUTE[i+1], dx=b.x-a.x,dz=b.z-a.z,t=Math.max(0,Math.min(1,((p.x-a.x)*dx+(p.z-a.z)*dz)/(LENGTHS[i]**2))); d=Math.min(d,Math.hypot(p.x-a.x-dx*t,p.z-a.z-dz*t)); }
-    return d;
+    return Math.min(d,roadDistance(p));
   }
-  reset() { for(const o of this.obstacles) if(o.group) {o.knocked=false; o.group.rotation.x=0; o.group.rotation.z=0;} }
+  knock(o:Obstacle,speed:number,heading:number){if(!o.group||o.knocked)return;o.knocked=true;o.vx=Math.sin(heading)*Math.min(9,speed*.46);o.vz=-Math.cos(heading)*Math.min(9,speed*.46);o.vy=Math.min(3.7,speed*.16);o.age=0;}
+  animateProps(dt:number){for(const o of this.obstacles){if(!o.knocked||!o.group||o.age!>3)continue;o.age=(o.age??0)+dt;o.vy=(o.vy??0)-10*dt;o.group.position.x+=(o.vx??0)*dt;o.group.position.z+=(o.vz??0)*dt;o.group.position.y=Math.max(.15,o.group.position.y+o.vy*dt);if(o.group.position.y<=.15)o.vy=Math.abs(o.vy)*.26;o.vx!*=Math.exp(-dt*2.3);o.vz!*=Math.exp(-dt*2.3);o.group.rotation.x=Math.min(.95,(o.age??0)*2);o.group.rotation.z=Math.min(.31,(o.age??0)*.7);}}
+  updateVisibility(p:V2){for(const o of this.obstacles)if(o.group)o.group.visible=Math.hypot(o.group.position.x-p.x,o.group.position.z-p.z)<165;}
+  reset() { for(const o of this.obstacles) if(o.group) {o.knocked=false;o.age=0;o.vx=o.vz=o.vy=0;o.group.position.set(o.x,o.homeY??.15,o.z);if(o.homeRotation)o.group.rotation.copy(o.homeRotation);else o.group.rotation.set(0,-o.heading,0);} }
 }
 export function makeStop(stop: Stop) {
   const g=new T.Group();g.position.set(stop.x,.20,stop.z);g.rotation.y=-stop.heading;
@@ -269,5 +312,7 @@ export function makeStop(stop: Stop) {
   for(const x of [-STOP_HALF_WIDTH,STOP_HALF_WIDTH]){const line=new T.Mesh(new T.BoxGeometry(.13,.045,STOP_HALF_LENGTH*2),mat);line.position.x=x;g.add(line);}
   for(const z of [-STOP_HALF_LENGTH,STOP_HALF_LENGTH]){const line=new T.Mesh(new T.BoxGeometry(STOP_HALF_WIDTH*2,.045,.13),mat);line.position.z=z;g.add(line);}
   const label=sign(stop.terminal?'尾 站':'上 落 客',stop.terminal?'TERMINUS':'DOOR IN ZONE','#155a47','#e3ffbc',3.6,1.2);label.rotation.x=-Math.PI/2;label.position.set(0,.04,0);g.add(label);
-  return {group:g,fill,mat,label};
+  const zone=new T.Group();for(const child of [...g.children])zone.add(child);g.add(zone);
+  const pole=new T.Group();pole.position.set(-6.2,0,0);cylinder(pole,'#689885',0,1.65,0,.07,3.3);cylinder(pole,'#54836c',0,.11,0,.42,.18,16);box(pole,'#b52833',0,2.94,0,1.08,.95,.12);const stand=sign('小巴站',stop.terminal?'旺角總站 · TERMINUS':'深水埗 ⇄ 旺角','#f4e6c9','#b32531',.93,.78,'bus-stop');stand.position.set(0,2.94,.07);pole.add(stand);const schedule=sign('$12','PUBLIC LIGHT BUS','#e9e3cb','#385c47',.75,.68);schedule.position.set(0,2.11,.08);pole.add(schedule);g.add(pole);
+  return {group:g,fill,mat,label,pole,zone};
 }

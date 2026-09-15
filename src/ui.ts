@@ -3,18 +3,21 @@ export class UI {
   root:HTMLElement; onStart=()=>{};onResume=()=>{};onMenu=()=>{};onPause=()=>{};onDoor=()=>{};onReset=()=>{};
   onSettings=(values:{music:number;sfx:number;voice:number;quality:string})=>{};
   mode='menu'; gameMode:GameMode='challenge'; settings={music:.42,sfx:.72,voice:.8,quality:'high'};
+  timeOfDay:'day'|'night'='day';onTimeOfDay=()=>{};
   constructor(){
     try{this.settings={...this.settings,...JSON.parse(localStorage.getItem('redvan-settings')||'{}')};}catch{}
     try{if(localStorage.getItem('redvan-mode')==='free')this.gameMode='free';}catch{}
+    try{if(localStorage.getItem('redvan-time')==='night')this.timeOfDay='night';}catch{}
     this.root=document.querySelector('#app')!;
     this.root.innerHTML=`
       <div id="viewport" aria-label="紅Van 3D 遊戲場景"></div><div class="vignette"></div>
       <div id="menu" class="screen menu">
-        <div class="menu-top"><span class="stamp">香港街頭駕駛挑戰</span><span class="edition">VOL. 01 · 九龍</span></div>
+        <div class="menu-top"><span class="stamp">香港街頭駕駛挑戰</span><span class="edition">九龍 · 日與夜</span></div>
         <div class="menu-content"><div class="route-tag"><span>深水埗</span><i>↔</i><span>旺角</span></div>
         <h1>紅<span>Van</span><b>RED VAN</b></h1><p class="english-title">FAST AND FURIOUS</p>
-        <div class="menu-rule"></div><p class="pitch">三分鐘，一條街。<br>接得多，揸得穩，先係好車手。</p>
+        <div class="menu-rule"></div><p class="pitch">三分鐘，穿梭九龍街頭。<br>接得多，揸得穩，先係好車手。</p>
         <div class="mode-picker" role="group" aria-label="遊戲模式"><button id="mode-challenge" aria-pressed="true">挑戰模式</button><button id="mode-free" aria-pressed="false">暢玩模式</button></div><p id="mode-description" class="mode-description">計分及 S–D 評級，挑戰最佳車手。</p>
+        <div class="time-picker" role="group" aria-label="日夜模式"><button id="time-day" aria-pressed="true">☀ 日間街景</button><button id="time-night" aria-pressed="false">☾ 霓虹夜景</button></div>
         <button id="start" class="primary" disabled><span id="start-text">正在準備街道…</span><span>↗</span></button>
         <button id="demo-open" class="demo-launch" disabled>自動示範＋錄影 <span>●</span></button>
         <div class="menu-links"><button id="help-open">玩法及操作</button><button id="settings-open">聲音及畫質</button></div>
@@ -36,9 +39,9 @@ export class UI {
         <div id="damage-flash"></div>
       </div>
       <div id="pause-screen" class="overlay hidden"><div class="panel"><span class="eyebrow">TAKE A BREATHER</span><h2>稍事休息</h2><p>倒數已暫停。準備好就繼續上路。</p><button id="resume" class="primary">繼續駕駛 <span>↗</span></button><button id="pause-settings" class="secondary">聲音及畫質</button><button id="quit" class="text-button">返回主畫面</button></div></div>
-      <div id="help" class="overlay hidden"><div class="panel wide"><span class="eyebrow">HOW TO PLAY</span><h2>上路之前</h2><div class="help-grid"><div><b>01 / 跟箭嘴行</b><p>180 秒內沿路線抵達旺角。箭嘴指向下一個轉彎，駛錯方向可以循箭嘴返回。</p></div><div><b>02 / 停妥先開門</b><p>綠色方塊有乘客上車，藍色方塊有乘客落車。將左前車門停入方塊，按 E 開門，完成後再按 E 關門。</p></div><div><b>03 / 留意車速</b><p>煞車會迅速停車；停妥後放開再按 S 可倒車。有乘客時高速急煞會引起不滿。超速、衝紅燈及危險操作在挑戰模式扣分。行人會及時跳開，不會受傷。</p></div><div><b>04 / 挑戰 S 級</b><p>挑戰模式按路線、乘客、時間及駕駛表現計分；暢玩模式沒有分數或車損失敗，只需在 180 秒內完成全部指定接送及到站。兩種模式都須停妥、完成落客並關門。</p></div></div><div class="key-list"><span><kbd>W / ↑</kbd> 油門</span><span><kbd>S / ↓</kbd> 剎車／倒車</span><span><kbd>A D / ← →</kbd> 轉向</span><span><kbd>SPACE</kbd> 手掣</span><span><kbd>E</kbd> 開關門</span><span><kbd>R</kbd> 復位（挑戰模式扣分及 5 秒）</span></div><button class="primary close-modal">明白，準備開車 <span>↗</span></button></div></div>
+      <div id="help" class="overlay hidden"><div class="panel wide"><span class="eyebrow">HOW TO PLAY</span><h2>上路之前</h2><div class="help-grid"><div><b>01 / 跟箭嘴行</b><p>180 秒內沿路線抵達旺角。街區有多條支路；走錯路時箭嘴轉紅，跟隨指示返回未完成路段。主畫面可切換日間或霓虹夜景。</p></div><div><b>02 / 停妥先開門</b><p>綠色方塊有乘客上車，藍色方塊有乘客落車。將左前車門停入方塊，按 E 開門，完成後再按 E 關門。</p></div><div><b>03 / 留意車速</b><p>煞車會迅速停車；停妥後放開再按 S 可倒車。有乘客時高速急煞會引起不滿。超速、衝紅燈及危險操作在挑戰模式扣分。行人會及時跳開，不會受傷。</p></div><div><b>04 / 挑戰 S 級</b><p>挑戰模式按路線、乘客、時間及駕駛表現計分；暢玩模式沒有分數或車損失敗，只需在 180 秒內完成全部指定接送及到站。兩種模式都須停妥、完成落客並關門。</p></div></div><div class="key-list"><span><kbd>W / ↑</kbd> 油門</span><span><kbd>S / ↓</kbd> 剎車／倒車</span><span><kbd>A D / ← →</kbd> 轉向</span><span><kbd>SPACE</kbd> 手掣</span><span><kbd>E</kbd> 開關門</span><span><kbd>R</kbd> 復位（挑戰模式扣分及 5 秒）</span></div><button class="primary close-modal">明白，準備開車 <span>↗</span></button></div></div>
       <div id="settings" class="overlay hidden"><div class="panel"><span class="eyebrow">MAKE IT YOUR RIDE</span><h2>聲音及畫質</h2><label>背景音樂<input id="music" type="range" min="0" max="1" step="0.05"></label><label>引擎及音效<input id="sfx" type="range" min="0" max="1" step="0.05"></label><label>乘客人聲<input id="voice" type="range" min="0" max="1" step="0.05"></label><label>畫質<select id="quality"><option value="high">高 · 陰影及較高解像度</option><option value="low">流暢 · 較低解像度</option></select></label><button class="primary close-modal">完成 <span>✓</span></button></div></div>
-      <div id="credits" class="overlay hidden"><div class="panel wide"><span class="eyebrow">MADE FOR THE STREETS</span><h2>《紅Van》第一版</h2><p>香港市區風格的原創街機駕駛遊戲。街道配置、商店名稱、3D 模型及背景音樂為本作製作；參考真實街景的建築比例、街道設施及小巴外形。</p><p>街景參考：Wikimedia Commons 的旺角紅色小巴、東京街夜景、深水埗商店招牌及香港橙色垃圾桶圖片。詳細來源見專案的素材文件。</p><p>技術：Three.js · Rapier · Web Audio<br>粵語短句：eSpeak NG 合成語音。音樂由原創音序即時合成。</p><p>以 Crazy Taxi 的街機節奏為靈感；本作與 SEGA 沒有關聯。</p><button class="primary close-modal">返回 <span>↗</span></button></div></div>
+      <div id="credits" class="overlay hidden"><div class="panel wide"><span class="eyebrow">MADE FOR THE STREETS</span><h2>《紅Van》第一版</h2><p>香港市區風格的原創街機駕駛遊戲。街道配置、商店名稱、3D 模型及背景音樂為本作製作；參考真實街景的建築比例、街道設施及小巴外形。</p><p>街景參考：玩家提供的香港街景、小巴及街道設施照片；M+ 霓虹招牌藏品、香港路政署街景資料及 Wikimedia Commons 街景。詳細來源見專案的素材文件。</p><p>技術：Three.js · Rapier · Web Audio<br>粵語短句：eSpeak NG 合成語音。音樂由原創音序即時合成。</p><p>以 Crazy Taxi 的街機節奏為靈感；本作與 SEGA 沒有關聯。</p><button class="primary close-modal">返回 <span>↗</span></button></div></div>
       <div id="results" class="overlay hidden"><div class="result-panel"><div class="result-heading"><div><span class="eyebrow">SHIFT COMPLETE</span><h2 id="result-title">準時到站！</h2><p id="result-subtitle">今日這一轉，辛苦晒。</p></div><div id="grade" class="grade">S</div></div><div class="total-row challenge-only"><span>本局總分</span><strong id="result-score">1,000</strong><span>/ 1,000</span></div><div id="score-breakdown" class="score-breakdown challenge-only"></div><div id="result-stats" class="result-stats"></div><div class="result-actions"><button id="retry" class="primary">再開一轉 <span>↗</span></button><button id="result-menu" class="secondary">返回主畫面</button></div><small id="run-seed"></small></div></div>
       <div id="demo-dialog" class="overlay hidden"><div class="panel wide"><span class="eyebrow">AUTO DRIVE · LOCAL RECORDING</span><h2>錄一轉《紅Van》</h2><p>這是自動駕駛示範，並非人工實玩。使用固定路況，以正常速度完成限時 180 秒的路線；上落客、交通、碰撞及計分照常運作，示範不計入個人最佳。</p><ol class="demo-steps"><li>按下錄影，在瀏覽器分享視窗選擇<strong>目前的《紅Van》分頁</strong>。</li><li>保持遊戲分頁在前景。錄下主畫面 5 秒後會自動開車；離開分頁會暫停，返回後按「繼續駕駛」。</li><li>提早到站即計分，保留計分畫面 8 秒後停止；可預覽及下載 WebM／MP4 影片。</li></ol><p class="demo-note">錄影包含介面、音樂及遊戲音效，不使用咪高峰。影片只保留在你的瀏覽器，不會上載；請在重新載入或開始下一段錄影前下載。請使用電腦版 Chrome／Edge，先在「聲音及畫質」調整音量。</p><p id="demo-error" role="status"></p><button id="demo-record" class="primary">選擇遊戲分頁並錄影 <span>●</span></button><button id="demo-close" class="text-button">返回</button></div></div>
       <div id="demo-banner" class="hidden" role="status"><strong>● 自動駕駛示範</strong><span id="demo-status"></span><button id="demo-cancel">停止並保存</button></div>
@@ -50,9 +53,11 @@ export class UI {
     document.querySelectorAll<HTMLElement>('.close-modal').forEach(el=>el.onclick=()=>el.closest('.overlay')!.classList.add('hidden'));
     for(const name of ['music','sfx','voice','quality'] as const){const e=this.el(name) as HTMLInputElement;e.value=String(this.settings[name]);e.oninput=()=>{this.settings={music:+(this.el('music')as HTMLInputElement).value,sfx:+(this.el('sfx')as HTMLInputElement).value,voice:+(this.el('voice')as HTMLInputElement).value,quality:(this.el('quality')as HTMLSelectElement).value};try{localStorage.setItem('redvan-settings',JSON.stringify(this.settings));}catch{}this.onSettings(this.settings);};}
     this.el('mode-challenge').onclick=()=>this.applyGameMode('challenge');this.el('mode-free').onclick=()=>this.applyGameMode('free');this.applyGameMode(this.gameMode);
+    this.el('time-day').onclick=()=>this.applyTimeOfDay('day');this.el('time-night').onclick=()=>this.applyTimeOfDay('night');this.applyTimeOfDay(this.timeOfDay);
     this.updateBest();
   }
   applyGameMode(mode:GameMode){this.gameMode=mode;document.body.dataset.gameMode=mode;this.el('mode-challenge').setAttribute('aria-pressed',String(mode==='challenge'));this.el('mode-free').setAttribute('aria-pressed',String(mode==='free'));this.text('mode-description',mode==='challenge'?'計分及 S–D 評級，挑戰最佳車手。':'無分數、無車損失敗；限時完成全部接送。');try{localStorage.setItem('redvan-mode',mode);}catch{}}
+  applyTimeOfDay(mode:'day'|'night'){this.timeOfDay=mode;document.body.dataset.timeOfDay=mode;this.el('time-day').setAttribute('aria-pressed',String(mode==='day'));this.el('time-night').setAttribute('aria-pressed',String(mode==='night'));try{localStorage.setItem('redvan-time',mode);}catch{}this.onTimeOfDay();}
   el(id:string){return document.getElementById(id)!;}
   text(id:string,value:string){const el=this.el(id);if(el.textContent!==value)el.textContent=value;}
   show(id:string){this.el(id).classList.remove('hidden');}

@@ -8,6 +8,10 @@ import { GameAudio } from './audio';
 import { UI } from './ui';
 import { DemoRecorder,DEMO_SEED } from './demo';
 import { makeSignals,updateSignals,moveTraffic,trafficPoint,type Signal } from './traffic';
+import { navigate } from './roads';
+import { EXTRA_TEXT } from './streetscape';
+import { StreetLighting } from './lighting';
+import { WheelSparks, bodyMotion } from './driving-effects';
 
 type Traffic={s:number;speed:number;direction:number;lane:number;model:VehicleModel;body:RAPIER.RigidBody;hitUntil:number;halfLength:number;velocity:number;wrapped:boolean};
 type Pedestrian={s:number;lateral:number;offset?:number;person:PersonModel;body:RAPIER.RigidBody;hit:boolean;cross:boolean;phase:number;crossing?:number;dodge?:Dodge};
@@ -25,28 +29,32 @@ export class Game {
   menuTime=0;cameraLook=new T.Vector3();cameraPos=new T.Vector3();cameraReady=false;smoke:T.InstancedMesh;smokeDummy=new T.Object3D();
   qa=import.meta.env.DEV&&new URLSearchParams(location.search).get('qa')==='1';autopilot=false;pilotStop=-1;pilotServed=new Set<number>();qaSpeed=1;qaTraffic=true;fps=60;fpsTime=0;frames=0;
   sun:T.DirectionalLight;demoRun=false;demoRecorder?:DemoRecorder;
+  ambient:T.HemisphereLight;lighting?:StreetLighting;sparks?:WheelSparks;driveInput:Controls={throttle:0,steer:0,handbrake:false};navigation?:ReturnType<typeof navigate>;nextNavAt=0;
   constructor(){
     this.renderer=new T.WebGLRenderer({antialias:true,powerPreference:'high-performance'});this.renderer.outputColorSpace=T.SRGBColorSpace;this.renderer.toneMapping=T.ACESFilmicToneMapping;this.renderer.toneMappingExposure=1.1;
     const generator=new T.PMREMGenerator(this.renderer),room=new RoomEnvironment();this.scene.environment=generator.fromScene(room,.04).texture;room.dispose();generator.dispose();this.scene.environmentIntensity=.6;
     this.renderer.setClearColor('#c9d7d8');this.renderer.shadowMap.enabled=true;this.renderer.shadowMap.type=T.PCFSoftShadowMap;
     this.ui.el('viewport').append(this.renderer.domElement);this.scene.fog=new T.Fog('#c5d2ce',140,385);
-    this.scene.add(new T.HemisphereLight('#d5e4f2','#78674e',1.75));
+    this.ambient=new T.HemisphereLight('#d5e4f2','#78674e',1.75);this.scene.add(this.ambient);
     this.sun=new T.DirectionalLight('#ffe0ad',3.2);this.sun.position.set(-40,85,35);this.sun.castShadow=true;this.sun.shadow.mapSize.set(1536,1536);this.sun.shadow.camera.left=-35;this.sun.shadow.camera.right=35;this.sun.shadow.camera.top=35;this.sun.shadow.camera.bottom=-35;this.sun.shadow.camera.far=190;this.sun.shadow.bias=-.001;this.scene.add(this.sun);this.scene.add(this.sun.target);
     const smokeMat=new T.MeshBasicMaterial({color:'#455656',transparent:true,opacity:.25,depthWrite:false});this.smoke=new T.InstancedMesh(new T.SphereGeometry(1,7,5),smokeMat,12);this.smoke.visible=false;this.scene.add(this.smoke);
     this.demoRecorder=new DemoRecorder(this.ui,this.audio,{start:()=>this.start(DEMO_SEED,true),stop:()=>{if(this.mode!=='results')this.menu();}});
     this.bind();this.resize();this.applySettings();this.ui.setMode('menu');
   }
   async init(){
+    await document.fonts.load('700 24px "Noto Sans TC"',EXTRA_TEXT+'香港日報街坊週刊美食指南汽車世界城中生活恆興士多港灣洗衣榕樹茶室海棠花店德記粥品星光旅館九龍好味道');
     await document.fonts.load('700 24px "Noto Sans TC"','金記茶餐廳旺角電器新發大藥房裕華辦館好運冰室永興五金香港鮮果大眾車行深水埗公共小型巴士北河街福華長沙灣道界限汝州荔枝角當茶藥飯美華理髮陳記燒臘嘉樂餅家聯發布行南洋咖啡銀河唱片春雨花店信和押明記麵家晨光攝影華昌鐘錶海記海味成記鎖匙利達文具樂聲琴行萬通找換請勿急煞');
     await document.fonts.ready;
     this.van=makeVehicle('minibus');this.scene.add(this.van.group);
     this.city=new City();this.scene.add(this.city.group);await Physics.init();this.physics=new Physics(this.city.obstacles);
+    this.lighting=new StreetLighting(this.scene,this.city);this.sparks=new WheelSparks();this.scene.add(this.sparks.mesh);this.applyTimeOfDay();
     for(let s=45;s<TOTAL_LENGTH-25;s+=45)this.checks.push(s);
     for(const s of CUMULATIVE.slice(1,-1))this.checks.push(s);this.checks.sort((a,b)=>a-b);
     this.makeTrip(1986);this.ui.ready();if(this.qa)this.makeQa();requestAnimationFrame(t=>this.frame(t));
   }
   bind(){
     this.ui.onStart=()=>void this.start();this.ui.onResume=()=>void this.resume();this.ui.onPause=()=>this.pause();this.ui.onMenu=()=>{if(this.demoRecorder?.busy)this.demoRecorder.stop('示範已停止；影片保留已錄下的部分。');else this.menu();};this.ui.onDoor=()=>{if(!this.demoRecorder?.busy)this.toggleDoor();};this.ui.onSettings=()=>this.applySettings();
+    this.ui.onTimeOfDay=()=>this.applyTimeOfDay();
     addEventListener('resize',()=>this.resize());
     addEventListener('keydown',e=>{if((e.target as HTMLElement).matches('input,select'))return;if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key))e.preventDefault();const key=e.key.toLowerCase();if(this.demoRecorder?.busy&&key!=='escape')return;this.keys.add(key);if(e.repeat)return;if(key==='s'||key==='arrowdown')this.reverseReady=Math.abs(this.state.speed)<.2;if(key==='e')this.toggleDoor();if(key==='r')this.resetVan();if(key==='h'&&this.mode==='playing')this.audio.effect('horn');if(key==='escape'){if(this.mode==='playing'||this.mode==='countdown')this.pause();else if(this.mode==='paused')void this.resume();} });
     addEventListener('keyup',e=>this.keys.delete(e.key.toLowerCase()));
@@ -56,11 +64,13 @@ export class Game {
   }
   resize(){this.renderer.setSize(innerWidth,innerHeight);this.camera.aspect=innerWidth/innerHeight;this.camera.updateProjectionMatrix();}
   applySettings(){this.audio.setLevels(this.ui.settings);this.renderer.setPixelRatio(Math.min(devicePixelRatio,this.ui.settings.quality==='low'?1:1.65));this.renderer.shadowMap.enabled=this.ui.settings.quality==='high';}
+  applyTimeOfDay(){const night=this.ui.timeOfDay==='night';this.renderer.setClearColor(night?'#091827':'#c9d7d8');this.renderer.toneMappingExposure=night?1.05:1.1;this.scene.fog=new T.Fog(night?'#102331':'#c5d2ce',night?90:140,night?315:385);this.scene.environmentIntensity=night?.22:.6;this.ambient.color.set(night?'#8ba6d1':'#d5e4f2');this.ambient.groundColor.set(night?'#39434a':'#78674e');this.ambient.intensity=night?.85:1.75;this.sun.color.set(night?'#9cbbdf':'#ffe0ad');this.sun.intensity=night?.6:3.2;this.lighting?.setNight(night);}
   makeTrip(seed:number){
     for(const group of [...this.traffic.map(t=>t.model.group),...this.pedestrians.map(p=>p.person.group),...this.riderVisuals.map(v=>v.person.group),...this.stopModels.map(s=>s.group)]){this.scene.remove(group);disposeModel(group);}
     this.physics.clearMovers();this.traffic=[];this.pedestrians=[];this.riderVisuals=[];this.stopModels=[];this.riderBodies=[];this.riderHit=new Set();
     this.trip=createTrip(seed);this.signals=makeSignals(seed);this.brakeSince=0;this.brakePeak=0;this.wasBraking=false;this.reverseReady=false;this.brakeJolt=0;this.time=0;this.stats=newStats();this.health=100;this.progress=0;this.checkIndex=0;this.doorOpen=false;this.doorAmount=0;this.serviceClock=0;this.unsafeDoor=false;this.terminalOpened=false;this.dropAnnounced.clear();this.hitCooldown.clear();this.pilotServed.clear();this.pilotStop=-1;
     this.state={x:-7,z:32,speed:0,heading:0};this.physics.teleport(this.state);this.physics.reset();this.city.reset();
+    this.driveInput={throttle:0,steer:0,handbrake:false};this.navigation=undefined;this.nextNavAt=0;this.sparks?.reset();if(this.van.ads)this.van.ads.visible=random(seed^9187)()>.42;
     for(const stop of this.trip.stops){const s=makeStop(stop);this.scene.add(s.group);this.stopModels.push(s);}
     for(const r of this.trip.riders){const p=this.trip.stops[r.pickup],point=onRoute(p.s+(r.id%2)*1.5,14.3);const person=makePerson(seed+r.id*31);person.group.position.set(point.x,.25,point.z);person.group.rotation.y=-p.heading-Math.PI/2;this.scene.add(person.group);this.riderVisuals.push({person,from:person.group.position.clone(),to:person.group.position.clone(),moving:0,out:false});}
     for(const r of this.trip.riders)this.riderBodies.push(this.physics.addMover('person',100+r.id,.32,.32));
@@ -89,7 +99,7 @@ export class Game {
   }
   pause(){if(this.mode!=='playing'&&this.mode!=='countdown')return;this.mode='paused';this.ui.setMode('paused');this.keys.clear();this.touch.clear();this.audio.pause();}
   async resume(){if(this.mode!=='paused')return;await this.audio.unlock();this.mode=this.count>0?'countdown':'playing';this.ui.setMode(this.mode);this.keys.clear();this.touch.clear();}
-  menu(){this.mode='menu';this.autopilot=false;this.demoRun=false;this.ui.setMode('menu');this.ui.hide('settings');this.ui.hide('countdown');this.ui.hide('toast');this.audio.pause();this.state={x:-7,z:32,speed:0,heading:0};this.van.group.position.set(-7,0,32);this.van.group.rotation.set(0,0,0);this.cameraReady=false;}
+  menu(){this.sparks?.reset();this.mode='menu';this.autopilot=false;this.demoRun=false;this.ui.setMode('menu');this.ui.hide('settings');this.ui.hide('countdown');this.ui.hide('toast');this.audio.pause();this.state={x:-7,z:32,speed:0,heading:0};this.van.group.position.set(-7,0,32);this.van.group.rotation.set(0,0,0);this.cameraReady=false;}
   toast(text:string,bad=false,duration=2.5){this.ui.text('toast',text);this.ui.el('toast').classList.toggle('bad',bad);this.ui.show('toast');this.toastUntil=this.time+duration;}
   toggleDoor(){if(this.mode!=='playing'||this.doorAmount>.02&&this.doorAmount<.98)return;this.doorOpen=!this.doorOpen;this.serviceClock=0;this.audio.effect('door');if(this.doorOpen&&Math.abs(this.state.speed)>=STOP_SPEED&&!this.unsafeDoor){this.stats.doorViolations++;this.unsafeDoor=true;this.audio.say('door',true);this.notice('未停妥開門！',40);} }
   resetVan(){if(this.mode!=='playing')return;const s=this.checkIndex?this.checks[this.checkIndex-1]:8;const p=onRoute(Math.max(8,s-8),7);this.state={...p,speed:0};this.physics.teleport(this.state);if(this.gameMode!=='free')this.stats.remaining=Math.max(0,this.stats.remaining-5);this.stats.resets++;this.doorOpen=false;this.doorAmount=0;this.unsafeDoor=false;this.cameraReady=false;this.toast(this.gameMode==='free'?'已返回安全路面':'已返回安全路面 · −5 秒／駕駛分 −30',true);}
@@ -113,7 +123,7 @@ export class Game {
       else{this.stats.objects++;this.penalty(20);damage=3+speed*.65;this.notice('碰撞物件',20);}
       if(this.gameMode!=='free')this.health-=damage;
       this.audio.effect('hit',speed/13);
-      if(target.obstacle?.group&&speed>3){target.obstacle.group.rotation.x=.9;target.obstacle.group.rotation.z=.28;}
+      if(target.obstacle?.group&&speed>3){this.city.knock(target.obstacle,speed,this.state.heading);this.brakeJolt=.8;}
     }else return;
     this.health=Math.max(0,this.health);this.flash=.65;
   }
@@ -146,7 +156,7 @@ export class Game {
       if(r.state==='onboard'&&this.progress>d.s+25&&!d.terminal){r.dropoff=8;this.stats.missed++;this.penalty(25);this.notice('錯過落客位置 · 改於尾站落車',25);}
     }
     const drop=this.trip.stops.find(s=>s.s>=this.progress-8&&s.s-this.progress<90&&this.trip.riders.some(r=>r.state==='onboard'&&r.dropoff===s.id));
-    if(drop&&!this.dropAnnounced.has(drop.id)){this.dropAnnounced.add(drop.id);this.audio.say('dropoff',true);this.toast('「前面有落，唔該！」',false,2.8);}
+    if(drop&&!this.dropAnnounced.has(drop.id)){this.dropAnnounced.add(drop.id);this.audio.say('dropoff',true);this.toast('「唔該！」· 前方落車',false,2.8);}
     if(s?.terminal&&this.terminalOpened&&!this.doorOpen&&this.doorAmount<.02&&onboard===0&&this.checkIndex>=this.checks.length){this.stats.completed=true;this.finish('準時到站！');}
   }
   animateVehicles(dt:number){
@@ -205,7 +215,7 @@ export class Game {
     if(this.mode!=='playing')return;
     this.stats.remaining=Math.max(0,this.stats.remaining-dt);if(this.stats.remaining<=0){this.finish('時間到！');return;}
     const previous=projectRoute(this.state),beforeSpeed=Math.abs(this.state.speed);updateSignals(this.signals,previous.s,dt);
-    const input=this.autopilot?this.pilot():this.controls();this.animateVehicles(dt);this.evadePeople();
+    const input=this.autopilot?this.pilot():this.controls();this.driveInput=input;this.animateVehicles(dt);this.evadePeople();this.city.animateProps(dt);
     this.state=this.physics.step(this.state,input,this.health,this.city.distanceToRoad(this.state)>12,(a,b)=>this.onHit(a,b));
     const p=projectRoute(this.state);
     const braking=input.throttle<0||input.handbrake;
@@ -222,7 +232,7 @@ export class Game {
     if(this.doorAmount===0)this.unsafeDoor=false;
     this.updatePassengers(dt);
     if(this.health<=0)this.finish('小巴損壞，無法繼續');
-    this.audio.tick(this.state.speed,input.throttle,input.throttle<0||input.handbrake,this.stats.remaining,true);
+    this.audio.tick(this.state.speed,input.throttle,input.throttle<0||input.handbrake,this.stats.remaining,true,input.steer);
     if(Math.hypot(this.state.x,this.state.z)>2000)this.resetVan();
   }
   finish(reason:string){if(this.mode!=='playing')return;this.mode='results';this.autopilot=false;this.ui.hide('countdown');this.ui.hide('toast');this.audio.tick(0,0,false,0,false);this.audio.effect('finish');this.ui.results(this.stats,this.trip.seed,reason,this.demoRun,this.gameMode);if(this.demoRun)this.demoRecorder?.finished();}
@@ -234,10 +244,10 @@ export class Game {
     if(this.qa)this.updateQa();requestAnimationFrame(t=>this.frame(t));
   }
   render(dt:number){
-    this.brakeJolt=Math.max(0,this.brakeJolt-dt*2.5);this.van.group.position.set(this.state.x,.14,this.state.z);this.van.group.rotation.set(0,-this.state.heading,0);
-    if(this.mode==='playing')this.van.group.rotation.z=-this.controls().steer*Math.min(.03,Math.abs(this.state.speed)*.0014);
-    if(this.mode==='playing')this.van.group.rotation.x=-this.brakeJolt*.055;
-    this.van.brake.forEach(l=>l.scale.y=(this.controls().throttle<0||this.controls().handbrake)?1.1:1);
+    this.brakeJolt=Math.max(0,this.brakeJolt-dt*2.5);const active=this.mode==='playing',input=this.driveInput??this.controls(),motion=bodyMotion(active?this.state.speed:0,active?input.steer:0,this.time,this.brakeJolt);
+    this.van.group.position.set(this.state.x+motion.shake*Math.cos(this.state.heading),.14+motion.height,this.state.z+motion.shake*Math.sin(this.state.heading));this.van.group.rotation.set(motion.pitch,-this.state.heading,motion.roll);
+    this.van.brake.forEach(l=>l.scale.y=(input.throttle<0||input.handbrake)?1.1:1);
+    this.sparks?.update(active?dt:0,this.state,input.steer,input.throttle<0||input.handbrake,active);this.lighting?.update(dt,this.state.x,this.state.z,this.state.heading);this.city.updateVisibility(this.state);
     if(this.van.door){this.van.door.position.z=-2.1+this.doorAmount*1.15;this.van.door.rotation.y=this.doorAmount*.16;}
     if(this.mode==='playing')this.van.wheels.forEach(w=>w.rotation.x-=this.state.speed*dt/.52);
     for(const [i,v]of this.riderVisuals.entries()){
@@ -247,7 +257,7 @@ export class Game {
     }
     for(const [i,s]of this.stopModels.entries()){
       const st=this.trip.stops[i],drop=this.trip.riders.some(r=>r.state==='onboard'&&r.dropoff===i),pickup=this.trip.riders.some(r=>r.state==='waiting'&&r.pickup===i);
-      s.group.visible=(this.mode!=='menu')&&(st.terminal||drop||pickup)&&st.s>this.progress-28&&Math.hypot(this.state.x-st.x,this.state.z-st.z)<200;
+      s.group.visible=this.mode!=='menu'&&Math.hypot(this.state.x-st.x,this.state.z-st.z)<200;s.zone.visible=(st.terminal||drop||pickup)&&st.s>this.progress-28;
       const col=st.terminal?'#ffd967':drop?'#71d2ff':'#7defa4';s.mat.color.set(col);(s.fill.material as T.MeshBasicMaterial).color.set(col);(s.fill.material as T.MeshBasicMaterial).opacity=.20+Math.sin(this.time*3)*.055;
     }
     if(this.mode==='menu'){
@@ -274,12 +284,8 @@ export class Game {
     this.ui.text('free-service',this.stats.delivered+' / '+this.trip.riders.length);
     const trafficLight=this.signals.find(l=>l.s>p.s-9&&l.s-p.s<100);if(trafficLight){this.ui.show('traffic-status');this.ui.text('traffic-status',trafficLight.phase==='red'?'● 紅燈 · '+Math.ceil(trafficLight.duration-trafficLight.elapsed)+' 秒 · 行人過路':trafficLight.phase==='amber'?'● 黃燈 · 準備停車':'● 綠燈 · 留意過路處');this.ui.el('traffic-status').dataset.phase=trafficLight.phase;}else this.ui.hide('traffic-status');
     const onboard=this.trip.riders.filter(r=>r.state==='onboard').length;this.ui.text('riders',String(onboard));this.ui.text('delivered',String(this.stats.delivered));this.ui.text('door-status',this.doorAmount>.01?'車門開啟':'車門已關');this.ui.el('door-status').classList.toggle('open',this.doorAmount>.01);this.ui.text('street',STREETS[p.segment]);
-    const turn=CUMULATIVE.find(s=>s>p.s+13)??TOTAL_LENGTH,target=onRoute(Math.min(turn+10,TOTAL_LENGTH),7),angle=Math.atan2(target.x-this.state.x,-(target.z-this.state.z)),diff=angleDiff(angle,this.state.heading);
-    let nav='沿路直行',navAngle=0;const dist=turn-p.s;
-    if(p.distance>16||Math.abs(angleDiff(onRoute(p.s).heading,this.state.heading))>1.8){nav='返回路線';navAngle=clamp(diff,-Math.PI,Math.PI);}
-    else if(dist<75&&turn<TOTAL_LENGTH){const after=onRoute(turn+2).heading,before=onRoute(turn-2).heading,delta=angleDiff(after,before);nav=delta>0?'前方右轉':'前方左轉';navAngle=delta;}
-    else if(this.progress>TOTAL_LENGTH-85){nav='尾站就在前面';}
-    this.ui.text('nav-title',nav);this.ui.text('nav-distance',Math.max(0,Math.round(dist))+' m');this.ui.el('nav-arrow').style.transform=`rotate(${navAngle}rad)`;
+    if(!this.navigation||this.time>=this.nextNavAt){this.navigation=navigate(this.state,this.progress,this.checks[this.checkIndex]??TOTAL_LENGTH);this.nextNavAt=this.time+.18;}
+    const nav=this.navigation;this.ui.text('nav-title',nav.title);this.ui.text('nav-distance',(nav.recovering?'返回路線 · ':'')+nav.distance+' m');this.ui.el('nav-arrow').style.transform=`rotate(${nav.angle}rad)`;this.ui.el('nav-arrow').dataset.recovering=String(nav.recovering);this.ui.el('nav-title').dataset.recovering=String(nav.recovering);if(nav.recovering)this.ui.text('street',nav.street);
     const stop=this.trip.stops.find(s=>s.s>this.progress-20&&this.needsStop(s));if(stop&&stop.s-this.progress<160){const isDrop=this.trip.riders.some(r=>r.state==='onboard'&&r.dropoff===stop.id);this.ui.show('stop-banner');this.ui.text('stop-label',stop.terminal?'停妥、落客、關門，完成路線':isDrop?'乘客要求落車':'前方有人招手');this.ui.text('stop-name',stop.name);this.ui.text('stop-distance',Math.max(0,Math.round(stop.s-p.s))+' m');this.ui.el('stop-banner').classList.toggle('dropoff',isDrop);}else this.ui.hide('stop-banner');
     const current=this.currentStop();let prompt='停妥後開門上客';if(this.doorOpen){const pending=current&&this.trip.riders.some(r=>r.state==='waiting'&&r.pickup===current.id||r.state==='onboard'&&(r.dropoff===current.id||current.terminal));prompt=pending?'乘客上落中…':'上落客完成 · 按 E 關門';if(!current)prompt='請關門後行車';}else if(this.doorAmount>.02)prompt='正在關門…';else if(current)prompt=current.terminal?'按 E 開門 · 尾站落客':'按 E 開門 · 乘客上落';else if(kmh>2)prompt='將左前車門停入發光方塊';this.ui.text('door-prompt',prompt);this.ui.el('service-fill').style.width=(this.serviceClock/.68*100)+'%';
     const progress=clamp(this.progress/TOTAL_LENGTH*100,0,100);this.ui.text('progress-text',Math.floor(progress)+'%');this.ui.el('progress-fill').style.width=progress+'%';

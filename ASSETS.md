@@ -13,13 +13,23 @@
 
 照片權利及授權以各來源頁面為準；本版只用作研究參考，未分發照片本身。
 
+## 2026-09-15 新一輪視覺參考
+
+- 玩家提供的 19 張香港街景、小巴、欄杆、行人路及報紙檔照片已在工作區讀取並作美術參考；未把照片加入遊戲或儲存庫。
+- [M+：香港明生大押霓虹招牌照片，約 1970 年](https://www.mplus.org.hk/en/collection/objects/photograph-neon-sign-for-ming-seng-pawn-shop-hong-kong-ca13-4-38/)：懸臂招牌、霓虹邊框及押店圖形語言。
+- [香港路政署：街景美化](https://www.hyd.gov.hk/en/our_services/streetscape/streetscape/index.html)及[街道設施小冊子](https://www.hyd.gov.hk/en/our_services/streetscape/streetscape/doc/leaflet.pdf)：欄杆、路磚及燈柱參考。
+- [香港路政署：元朗行人天橋照片](https://www.hyd.gov.hk/en/our_services/streetscape/streetscape/doc/streetscape_yl.jpg)：有蓋橋面、欄杆及樓梯比例。
+- [Wikimedia Commons：九龍公園與中港城行人天橋](https://commons.wikimedia.org/wiki/File:Footbridge_connecting_Kowloon_Park_and_China_Hong_Kong_City_(Hong_Kong).jpg)：公園與街區連接的參考資料。
+
+場景為虛構香港街區，招牌圖案及建築皆為原創程式模型；沒有重製真實商標或把原相片作貼圖。
+
 ## 隨遊戲分發的素材
 
-- **3D 幾何與招牌：** `src/visuals.ts` 中的原創程式化模型。招牌使用真實字體排版；所有商店名稱屬遊戲場景設定。
+- **3D 幾何與招牌：** `src/visuals.ts` 及 `src/streetscape.ts` 中的原創程式化模型。招牌使用真實字體排版；所有商店名稱屬遊戲場景設定。
 - **材質及細節更新：** `src/surfaces.ts` 的原創程式化路面、地磚、灰泥及瓷磚貼圖；加入凹凸表面、車漆與玻璃反光、圓潤車身、輪圈、冷氣機及門框。樓宇高度、外牆色、露台、店面、簷篷和 24 種橫向／直向／霓虹風格招牌有不同組合。
 - **音樂：** `src/audio.ts` 中的原創 158 BPM breakbeat 音序，以 Web Audio 即時合成。
 - **引擎／剎車／投幣／碰撞／車門：** 原創 Web Audio 合成音效。
-- **粵語：** 原創短句經 eSpeak NG 生成的 WAV 音檔，生成工具為 `scripts/generate-voices.mjs`。eSpeak NG 不隨遊戲執行時分發。語音屬合成聲，並非真人錄音。
+- **粵語：** 原創短句經 eSpeak NG 生成的 WAV 音檔，生成工具為 `scripts/generate-voices.mjs`。八個男女變化音檔只含「唔該」、「搞錯呀」、「嘩」及驚呼；車軚摩擦聲另外即時合成。eSpeak NG 不隨遊戲執行時分發。語音屬合成聲，並非真人錄音。
 - **字體：** Noto Sans TC（SIL Open Font License 1.1），透過 `@fontsource/noto-sans-tc` 打包。授權文字見 `public/fonts/OFL.txt`。
 - **程式依賴：** Three.js（MIT）、Rapier（Apache-2.0）、Vite／TypeScript 與各自依賴遵從其原有授權。
 
