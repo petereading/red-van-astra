@@ -4,7 +4,7 @@
 
 ## 線上試玩
 
-- [ChatGPT Sites 版本：red-van-astra.peteread.chatgpt.site](https://red-van-astra.peteread.chatgpt.site)
+- [Cloudflare Pages 版本：red-van-astra.pages.dev](https://red-van-astra.pages.dev/)
 - 遊戲需要支援 WebGL 2 的現代瀏覽器；電腦版 Chrome、Edge、Firefox 或 Safari 配合鍵盤的體驗最佳。
 
 ## 第一版功能
@@ -61,11 +61,11 @@ npm run build
 npm run preview
 ```
 
-`dist/` 可部署至支援靜態檔案的主機。專案同時包含 Sites 的靜態發布設定；GitHub 儲存庫維持使用者設定的存取權限。
+`dist/` 可部署至任何支援靜態檔案的主機；目前公開版本使用 Cloudflare Pages。
 
 ## 部署至 Cloudflare Pages
 
-在 Cloudflare Dashboard 進入 **Workers & Pages → Create application → Pages → Connect to Git**，連接 GitHub 並選擇 `petereading/red-van-astra`。建立專案時使用以下設定：
+在 Cloudflare Dashboard 進入 **Workers & Pages → Create application → Pages → Connect to Git**，連接 GitHub 並選擇這個 repository。建立專案時使用以下設定：
 
 | Cloudflare Pages 欄位 | 設定值 |
 | --- | --- |
