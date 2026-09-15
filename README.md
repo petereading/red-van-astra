@@ -2,6 +2,11 @@
 
 香港市區風格的原創 3D 街機駕駛遊戲。玩家駕駛紅頂小巴，在 **180 秒**內由深水埗出發，沿虛構路線抵達旺角總站，途中停車開門接送乘客。
 
+## 線上試玩
+
+- [ChatGPT Sites 版本：red-van-astra.peteread.chatgpt.site](https://red-van-astra.peteread.chatgpt.site)
+- 遊戲需要支援 WebGL 2 的現代瀏覽器；電腦版 Chrome、Edge、Firefox 或 Safari 配合鍵盤的體驗最佳。
+
 ## 第一版功能
 
 - 主畫面、玩法說明、音量／畫質設定及暫停；可選「挑戰模式」或「暢玩模式」。
@@ -57,6 +62,21 @@ npm run preview
 ```
 
 `dist/` 可部署至支援靜態檔案的主機。專案同時包含 Sites 的靜態發布設定；GitHub 儲存庫維持使用者設定的存取權限。
+
+## 部署至 Cloudflare Pages
+
+在 Cloudflare Dashboard 進入 **Workers & Pages → Create application → Pages → Connect to Git**，連接 GitHub 並選擇 `petereading/red-van-astra`。建立專案時使用以下設定：
+
+| Cloudflare Pages 欄位 | 設定值 |
+| --- | --- |
+| Production branch | `main` |
+| Framework preset | `None` |
+| Build command | `npm run build` |
+| Build output directory | `dist` |
+| Root directory | 留空（儲存庫根目錄） |
+| Environment variable | `NODE_VERSION` = `24` |
+
+按 **Save and Deploy** 後，Cloudflare 會安裝依賴、建立正式版本並提供 `pages.dev` 網址。其後每次推送到 `main` 都會自動重新建置及發布。這個遊戲是純靜態前端，不需要 API 金鑰、資料庫或伺服器端環境變數。詳情可參考 Cloudflare 的 [Git integration](https://developers.cloudflare.com/pages/get-started/git-integration/) 及 [Build configuration](https://developers.cloudflare.com/pages/configuration/build-configuration/) 文件。
 
 ## 驗證
 
