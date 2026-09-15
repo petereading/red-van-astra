@@ -2,7 +2,7 @@ import * as T from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import type RAPIER from '@dimforge/rapier3d-compat';
 import { CAPACITY,CUMULATIVE,LENGTHS,RUN_SECONDS,STREETS,TOTAL_LENGTH,angleDiff,clamp,createTrip,newStats,onRoute,projectRoute,random,isStoppedAt,scoreRun,doorPosition,STOP_SPEED,type GameMode,type Controls,type DriveState,type Stop,type Trip,type Stats } from './core';
-import { City,makePerson,animatePerson,makeStop,makeVehicle,disposeModel,type PersonModel,type VehicleModel } from './visuals';
+import { City,makePerson,animatePerson,makeStop,updateStopGlow,makeVehicle,disposeModel,type PersonModel,type VehicleModel } from './visuals';
 import { Physics,type HitTarget } from './physics';
 import { GameAudio } from './audio';
 import { UI } from './ui';
@@ -12,11 +12,12 @@ import { navigate } from './roads';
 import { EXTRA_TEXT } from './streetscape';
 import { StreetLighting } from './lighting';
 import { WheelSparks, bodyMotion } from './driving-effects';
+import { outsideMap, recoveryPose, BOUNDARY_GRACE } from './boundary';
+import { animateDodge as dodgeAnimation, dodgeDestination, faceMovement, type Dodge } from './pedestrian-motion';
 
 type Traffic={s:number;speed:number;direction:number;lane:number;model:VehicleModel;body:RAPIER.RigidBody;hitUntil:number;halfLength:number;velocity:number;wrapped:boolean};
 type Pedestrian={s:number;lateral:number;offset?:number;person:PersonModel;body:RAPIER.RigidBody;hit:boolean;cross:boolean;phase:number;crossing?:number;dodge?:Dodge};
 type RiderVisual={person:PersonModel;from:T.Vector3;to:T.Vector3;moving:number;out:boolean;dodge?:Dodge};
-type Dodge={at:number;from:T.Vector3;to:T.Vector3};
 export class Game {
   ui=new UI();audio=new GameAudio();scene=new T.Scene();camera=new T.PerspectiveCamera(55,innerWidth/innerHeight,.1,470);
   renderer:T.WebGLRenderer;city!:City;physics!:Physics;van!:VehicleModel;trip:Trip=createTrip(1986);stats:Stats=newStats();
@@ -29,7 +30,7 @@ export class Game {
   menuTime=0;cameraLook=new T.Vector3();cameraPos=new T.Vector3();cameraReady=false;smoke:T.InstancedMesh;smokeDummy=new T.Object3D();
   qa=import.meta.env.DEV&&new URLSearchParams(location.search).get('qa')==='1';autopilot=false;pilotStop=-1;pilotServed=new Set<number>();qaSpeed=1;qaTraffic=true;fps=60;fpsTime=0;frames=0;
   sun:T.DirectionalLight;demoRun=false;demoRecorder?:DemoRecorder;
-  ambient:T.HemisphereLight;lighting?:StreetLighting;sparks?:WheelSparks;driveInput:Controls={throttle:0,steer:0,handbrake:false};navigation?:ReturnType<typeof navigate>;nextNavAt=0;
+  ambient:T.HemisphereLight;lighting?:StreetLighting;sparks?:WheelSparks;driveInput:Controls={throttle:0,steer:0,handbrake:false};navigation?:ReturnType<typeof navigate>;nextNavAt=0;boundaryStarted=-1;
   constructor(){
     this.renderer=new T.WebGLRenderer({antialias:true,powerPreference:'high-performance'});this.renderer.outputColorSpace=T.SRGBColorSpace;this.renderer.toneMapping=T.ACESFilmicToneMapping;this.renderer.toneMappingExposure=1.1;
     const generator=new T.PMREMGenerator(this.renderer),room=new RoomEnvironment();this.scene.environment=generator.fromScene(room,.04).texture;room.dispose();generator.dispose();this.scene.environmentIntensity=.6;
@@ -70,7 +71,7 @@ export class Game {
     this.physics.clearMovers();this.traffic=[];this.pedestrians=[];this.riderVisuals=[];this.stopModels=[];this.riderBodies=[];this.riderHit=new Set();
     this.trip=createTrip(seed);this.signals=makeSignals(seed);this.brakeSince=0;this.brakePeak=0;this.wasBraking=false;this.reverseReady=false;this.brakeJolt=0;this.time=0;this.stats=newStats();this.health=100;this.progress=0;this.checkIndex=0;this.doorOpen=false;this.doorAmount=0;this.serviceClock=0;this.unsafeDoor=false;this.terminalOpened=false;this.dropAnnounced.clear();this.hitCooldown.clear();this.pilotServed.clear();this.pilotStop=-1;
     this.state={x:-7,z:32,speed:0,heading:0};this.physics.teleport(this.state);this.physics.reset();this.city.reset();
-    this.driveInput={throttle:0,steer:0,handbrake:false};this.navigation=undefined;this.nextNavAt=0;this.sparks?.reset();if(this.van.ads)this.van.ads.visible=random(seed^9187)()>.42;
+    this.driveInput={throttle:0,steer:0,handbrake:false};this.navigation=undefined;this.nextNavAt=0;this.boundaryStarted=-1;this.ui.hide('boundary-warning');this.sparks?.reset();if(this.van.ads)this.van.ads.visible=random(seed^9187)()>.42;
     for(const stop of this.trip.stops){const s=makeStop(stop);this.scene.add(s.group);this.stopModels.push(s);}
     for(const r of this.trip.riders){const p=this.trip.stops[r.pickup],point=onRoute(p.s+(r.id%2)*1.5,14.3);const person=makePerson(seed+r.id*31);person.group.position.set(point.x,.25,point.z);person.group.rotation.y=-p.heading-Math.PI/2;this.scene.add(person.group);this.riderVisuals.push({person,from:person.group.position.clone(),to:person.group.position.clone(),moving:0,out:false});}
     for(const r of this.trip.riders)this.riderBodies.push(this.physics.addMover('person',100+r.id,.32,.32));
@@ -101,8 +102,22 @@ export class Game {
   async resume(){if(this.mode!=='paused')return;await this.audio.unlock();this.mode=this.count>0?'countdown':'playing';this.ui.setMode(this.mode);this.keys.clear();this.touch.clear();}
   menu(){this.sparks?.reset();this.mode='menu';this.autopilot=false;this.demoRun=false;this.ui.setMode('menu');this.ui.hide('settings');this.ui.hide('countdown');this.ui.hide('toast');this.audio.pause();this.state={x:-7,z:32,speed:0,heading:0};this.van.group.position.set(-7,0,32);this.van.group.rotation.set(0,0,0);this.cameraReady=false;}
   toast(text:string,bad=false,duration=2.5){this.ui.text('toast',text);this.ui.el('toast').classList.toggle('bad',bad);this.ui.show('toast');this.toastUntil=this.time+duration;}
-  toggleDoor(){if(this.mode!=='playing'||this.doorAmount>.02&&this.doorAmount<.98)return;this.doorOpen=!this.doorOpen;this.serviceClock=0;this.audio.effect('door');if(this.doorOpen&&Math.abs(this.state.speed)>=STOP_SPEED&&!this.unsafeDoor){this.stats.doorViolations++;this.unsafeDoor=true;this.audio.say('door',true);this.notice('未停妥開門！',40);} }
-  resetVan(){if(this.mode!=='playing')return;const s=this.checkIndex?this.checks[this.checkIndex-1]:8;const p=onRoute(Math.max(8,s-8),7);this.state={...p,speed:0};this.physics.teleport(this.state);if(this.gameMode!=='free')this.stats.remaining=Math.max(0,this.stats.remaining-5);this.stats.resets++;this.doorOpen=false;this.doorAmount=0;this.unsafeDoor=false;this.cameraReady=false;this.toast(this.gameMode==='free'?'已返回安全路面':'已返回安全路面 · −5 秒／駕駛分 −30',true);}
+  toggleDoor(){if(this.mode!=='playing'||this.doorAmount>.02&&this.doorAmount<.98)return;this.doorOpen=!this.doorOpen;this.serviceClock=0;this.audio.effect('door');if(this.doorOpen&&Math.abs(this.state.speed)>=STOP_SPEED&&!this.unsafeDoor){this.stats.doorViolations++;this.unsafeDoor=true;this.audio.gasp(true);this.notice('未停妥開門！',40);} }
+  resetVan(boundary=false){
+    if(this.mode!=='playing')return;
+    const s=this.checkIndex?this.checks[this.checkIndex-1]:8;
+    this.state=boundary?recoveryPose(this.state,this.checks[this.checkIndex]??TOTAL_LENGTH,this.traffic.map(t=>t.model.group.position)):{...onRoute(Math.max(8,s-8),7),speed:0};
+    this.physics.teleport(this.state);if(this.gameMode!=='free')this.stats.remaining=Math.max(0,this.stats.remaining-5);this.stats.resets++;
+    this.doorOpen=false;this.doorAmount=0;this.unsafeDoor=false;this.serviceClock=0;this.cameraReady=false;this.boundaryStarted=-1;this.navigation=undefined;this.nextNavAt=0;this.ui.hide('boundary-warning');
+    this.toast((boundary?'已越界 · 小巴已放回路上，朝返回路線方向':'已返回安全路面')+(this.gameMode==='free'?'':' · −5 秒／駕駛分 −30'),true,3.5);
+  }
+  updateBoundary(){
+    if(!outsideMap(this.state)){this.boundaryStarted=-1;this.ui.hide('boundary-warning');return false;}
+    if(this.boundaryStarted<0)this.boundaryStarted=this.time;
+    const remaining=BOUNDARY_GRACE-(this.time-this.boundaryStarted);
+    this.ui.text('boundary-warning','超出地圖範圍 · '+Math.max(0,remaining).toFixed(1)+' 秒後返回路上');this.ui.show('boundary-warning');
+    if(remaining<=0){this.resetVan(true);return true;}return false;
+  }
   currentStop(){return this.trip.stops.find(s=>isStoppedAt(this.state,this.state.heading,this.state.speed,s));}
   needsStop(stop:Stop){return stop.terminal||this.trip.riders.some(r=>r.state==='waiting'&&r.pickup===stop.id||r.state==='onboard'&&r.dropoff===stop.id);}
   notice(message:string,penalty=0){this.toast(message+(this.gameMode!=='free'&&penalty?' · 駕駛分 −'+penalty:''),penalty>0,2.6);}
@@ -114,28 +129,30 @@ export class Game {
       let actor:RiderVisual|Pedestrian;
       if(target.id!>=100){const id=target.id!-100;if(this.riderHit.has(id))return;this.riderHit.add(id);actor=this.riderVisuals[id];}
       else{const p=this.pedestrians[target.id!];if(!p||p.hit)return;p.hit=true;actor=p;}
-      const from=actor.person.group.position.clone(),p=projectRoute(from),safe=onRoute(p.s,Math.sign(p.lateral||1)*15);
-      actor.dodge={at:this.time,from,to:new T.Vector3(safe.x,.25,safe.z)};
-      this.stats.people++;this.penalty(150);this.audio.say('crash',true);this.notice('行人及時跳開，沒有受傷！',150);
+      const from=actor.person.group.position.clone();
+      actor.dodge={at:this.time,from,to:dodgeDestination(from,this.state,this.city.obstacles)};
+      this.stats.people++;this.penalty(150);this.audio.gasp(true);this.notice('行人及時跳開，沒有受傷！',150);
     }else if(speed>1.2||target.kind==='car'){
       let damage=0;
-      if(target.kind==='car'){this.stats.cars++;this.penalty(60);this.traffic[target.id!].hitUntil=this.time+2;damage=6+speed*.65;this.audio.say('crash');this.notice('撞車！',60);}
-      else{this.stats.objects++;this.penalty(20);damage=3+speed*.65;this.notice('碰撞物件',20);}
+      if(target.kind==='car'){this.stats.cars++;this.penalty(60);this.traffic[target.id!].hitUntil=this.time+2;damage=6+speed*.65;this.audio.gasp();this.notice('撞車！',60);}
+      else{this.stats.objects++;this.penalty(20);damage=3+speed*.65;this.notice(target.kind==='building'?'撞到'+(target.obstacle?.label??'建築物')+'！請繞行':'撞到'+(target.obstacle?.label??'物件'),20);}
       if(this.gameMode!=='free')this.health-=damage;
       this.audio.effect('hit',speed/13);
-      if(target.obstacle?.group&&speed>3){this.city.knock(target.obstacle,speed,this.state.heading);this.brakeJolt=.8;}
+      if(target.kind==='object'&&target.obstacle?.group&&speed>3){this.city.knock(target.obstacle,speed,this.state.heading);this.brakeJolt=.8;}
     }else return;
     this.health=Math.max(0,this.health);this.flash=.65;
   }
-  animateDodge(actor:RiderVisual|Pedestrian){
-    const d=actor.dodge;if(!d)return;
-    const t=clamp((this.time-d.at)/.52,0,1),ease=1-(1-t)**3;
-    actor.person.group.position.lerpVectors(d.from,d.to,ease);actor.person.group.position.y=.25+Math.sin(t*Math.PI)*.9;
-    actor.person.group.rotation.z=Math.sin(t*Math.PI)*.15;actor.person.arm.rotation.z=-2.5*(1-t);
+  animateDodge(actor:RiderVisual|Pedestrian){if(actor.dodge)dodgeAnimation(actor.person,actor.dodge,this.time);}
+  animateRiders(dt:number){
+    for(const [i,v]of this.riderVisuals.entries()){
+      const r=this.trip.riders[i];
+      if(v.moving>0){v.moving=Math.max(0,v.moving-dt);v.person.group.position.lerpVectors(v.from,v.to,1-v.moving/.65);faceMovement(v.person,v.from,v.to);animatePerson(v.person,this.time,false,true);if(v.moving===0){animatePerson(v.person,this.time,false,false);if(!v.out)v.person.group.visible=false;}}
+      else if(r.state==='waiting'){animatePerson(v.person,this.time,!v.dodge,false);if(v.dodge)this.animateDodge(v);}
+    }
   }
   evadePeople(){
     if(Math.abs(this.state.speed)<1.5||this.qa&&!this.qaTraffic)return;
-    const danger=(pos:T.Vector3)=>{const dx=pos.x-this.state.x,dz=pos.z-this.state.z,along=(dx*Math.sin(this.state.heading)-dz*Math.cos(this.state.heading))*Math.sign(this.state.speed),across=dx*Math.cos(this.state.heading)+dz*Math.sin(this.state.heading);return Math.abs(across)<1.65&&along> -3&&along<3.4+Math.abs(this.state.speed)*.22;};
+    const danger=(pos:T.Vector3)=>{const dx=pos.x-this.state.x,dz=pos.z-this.state.z,along=(dx*Math.sin(this.state.heading)-dz*Math.cos(this.state.heading))*Math.sign(this.state.speed),across=dx*Math.cos(this.state.heading)+dz*Math.sin(this.state.heading);return Math.abs(across)<1.65&&along> -3&&along<3.4+Math.abs(this.state.speed)*.55;};
     this.pedestrians.forEach((p,id)=>{if(!p.hit&&danger(p.person.group.position))this.onHit({kind:'person',id},Math.abs(this.state.speed));});
     this.riderVisuals.forEach((v,id)=>{if(this.trip.riders[id].state==='waiting'&&!this.riderHit.has(id)&&danger(v.person.group.position))this.onHit({kind:'person',id:id+100},Math.abs(this.state.speed));});
   }
@@ -145,9 +162,9 @@ export class Game {
     if(s&&this.doorAmount>.97&&this.doorOpen){
       if(s.terminal)this.terminalOpened=true;
       const r=pending.find(r=>r.state==='onboard')??(onboard<CAPACITY?pending.find(r=>r.state==='waiting'):undefined);
-      if(r){this.serviceClock+=dt;if(this.serviceClock>=.68){this.serviceClock=0;const v=this.riderVisuals[r.id],doorPoint=doorPosition(this.state,this.state.heading),door=new T.Vector3(doorPoint.x,.25,doorPoint.z);const side=onRoute(s.s+(r.id%2)*1.5,14.3);v.person.group.visible=true;v.moving=.65;
+      if(r){this.serviceClock+=dt;if(this.serviceClock>=.68){this.serviceClock=0;const v=this.riderVisuals[r.id],doorPoint=doorPosition(this.state,this.state.heading),door=new T.Vector3(doorPoint.x,.25,doorPoint.z);const side=onRoute(s.s+(r.id%2)*1.5,14.3);v.person.group.visible=true;v.moving=.65;v.dodge=undefined;v.person.group.rotation.z=0;
         if(r.state==='waiting'){r.state='onboard';this.stats.picked++;v.from.copy(v.person.group.position);v.to.copy(door);v.out=false;this.audio.effect('coin');this.toast('乘客上車 · 收車費 $12',false,1.1);}
-        else{r.state='delivered';this.stats.delivered++;v.from.copy(door);v.to.set(side.x,.25,side.z);v.person.group.position.copy(door);v.out=true;this.audio.say('thanks');this.toast('乘客安全送達',false,1.1);}
+        else{r.state='delivered';this.stats.delivered++;v.from.copy(door);v.to.set(side.x,.25,side.z);v.person.group.position.copy(door);v.out=true;if(!this.dropAnnounced.has(s.id)){this.dropAnnounced.add(s.id);this.audio.effect('bell');}this.toast('乘客安全送達',false,1.1);}
       }}else this.serviceClock=0;
     }else this.serviceClock=0;
     for(const r of this.trip.riders){
@@ -156,7 +173,7 @@ export class Game {
       if(r.state==='onboard'&&this.progress>d.s+25&&!d.terminal){r.dropoff=8;this.stats.missed++;this.penalty(25);this.notice('錯過落客位置 · 改於尾站落車',25);}
     }
     const drop=this.trip.stops.find(s=>s.s>=this.progress-8&&s.s-this.progress<90&&this.trip.riders.some(r=>r.state==='onboard'&&r.dropoff===s.id));
-    if(drop&&!this.dropAnnounced.has(drop.id)){this.dropAnnounced.add(drop.id);this.audio.say('dropoff',true);this.toast('「唔該！」· 前方落車',false,2.8);}
+    if(drop&&!this.dropAnnounced.has(drop.id)){this.dropAnnounced.add(drop.id);this.audio.effect('bell');this.toast('叮咚 · 前方有乘客落車',false,2.8);}
     if(s?.terminal&&this.terminalOpened&&!this.doorOpen&&this.doorAmount<.02&&onboard===0&&this.checkIndex>=this.checks.length){this.stats.completed=true;this.finish('準時到站！');}
   }
   animateVehicles(dt:number){
@@ -176,11 +193,13 @@ export class Game {
       let lateral=p.lateral,s=p.s;
       if(p.crossing!==undefined){const signal=this.signals[p.crossing],t=signal.phase==='green'?1:signal.phase==='red'?clamp((signal.elapsed-p.phase)/4.5,0,1):0;lateral=p.lateral*(1-t)+Math.sign(p.lateral)*.8*t;}
       if(!p.cross&&!p.hit)s+=Math.sin(this.time*.22+p.phase)*5;
-      const pos=onRoute(s,lateral);p.person.group.position.set(pos.x,.24,pos.z);p.person.group.rotation.y=-pos.heading+(p.cross?Math.sign(p.lateral)*Math.PI/2:0);
-      animatePerson(p.person,this.time,false,!p.hit&&(p.cross?this.signals[p.crossing!].phase==='red':true));
+      const before=p.person.group.position.clone(),pos=onRoute(s,lateral);p.person.group.position.set(pos.x,.25,pos.z);
+      const walking=!p.hit&&dt>0&&before.distanceTo(p.person.group.position)>.0001;
+      if(walking)faceMovement(p.person,before,p.person.group.position);else if(dt===0)p.person.group.rotation.y=-pos.heading+(p.cross?-Math.sign(p.lateral)*Math.PI/2:Math.cos(this.time*.22+p.phase)<0?Math.PI:0);
+      animatePerson(p.person,this.time,false,walking);
       if(p.dodge)this.animateDodge(p);
       let x=pos.x,z=pos.z;if(p.hit||this.qa&&!this.qaTraffic){x=10000+i;z=12000;}
-      p.body.setNextKinematicTranslation({x,y:1.0,z});p.person.group.visible=Math.hypot(this.state.x-pos.x,this.state.z-pos.z)<140;
+      p.body.setNextKinematicTranslation({x,y:1.0,z});p.person.group.visible=Math.hypot(this.state.x-p.person.group.position.x,this.state.z-p.person.group.position.z)<140;
     }
   }
   controls():Controls {return{throttle:this.keys.has('w')||this.keys.has('arrowup')||this.touch.has('gas')?1:this.keys.has('s')||this.keys.has('arrowdown')||this.touch.has('brake')?-1:0,steer:(this.keys.has('d')||this.keys.has('arrowright')||this.touch.has('right')?1:0)-(this.keys.has('a')||this.keys.has('arrowleft')||this.touch.has('left')?1:0),handbrake:this.keys.has(' '),reverse:this.reverseReady};}
@@ -210,30 +229,30 @@ export class Game {
     return{throttle,steer:clamp(err*2.7,-1,1),handbrake:(dist<.8||!!light&&light.s-p.s<12.5)&&Math.abs(this.state.speed)<1,reverse:false};
   }
   step(dt:number){
-    this.time+=dt;
+    if(this.mode==='playing'||this.mode==='countdown')this.time+=dt;
     if(this.mode==='countdown'){this.count-=dt;const n=Math.ceil(this.count);if(n!==this.lastCount&&n>0){this.lastCount=n;this.audio.effect('count');}this.ui.text('countdown',n>0?String(n):'開車！');if(this.count<=0){this.mode='playing';this.ui.setMode('playing');this.ui.hide('countdown');this.audio.effect('start');this.toast('靠左行車 · 留意綠色上客方塊');}return;}
     if(this.mode!=='playing')return;
     this.stats.remaining=Math.max(0,this.stats.remaining-dt);if(this.stats.remaining<=0){this.finish('時間到！');return;}
     const previous=projectRoute(this.state),beforeSpeed=Math.abs(this.state.speed);updateSignals(this.signals,previous.s,dt);
-    const input=this.autopilot?this.pilot():this.controls();this.driveInput=input;this.animateVehicles(dt);this.evadePeople();this.city.animateProps(dt);
+    const input=this.autopilot?this.pilot():this.controls();this.driveInput=input;this.animateVehicles(dt);this.animateRiders(dt);this.evadePeople();this.city.animateProps(dt);
     this.state=this.physics.step(this.state,input,this.health,this.city.distanceToRoad(this.state)>12,(a,b)=>this.onHit(a,b));
+    if(this.updateBoundary())return;
     const p=projectRoute(this.state);
     const braking=input.throttle<0||input.handbrake;
     if(braking&&!this.wasBraking){this.brakeSince=this.time;this.brakePeak=beforeSpeed;}
-    if(braking&&this.brakePeak>=50/3.6&&Math.abs(this.state.speed)<.5&&this.time-this.brakeSince<1.1&&this.trip.riders.some(r=>r.state==='onboard')){this.stats.harshBrakes++;this.penalty(25);this.brakePeak=0;this.brakeJolt=1;this.audio.say('slow',true);this.audio.effect('brake');this.notice('高速急煞！乘客不滿',25);}
+    if(braking&&this.brakePeak>=50/3.6&&Math.abs(this.state.speed)<.5&&this.time-this.brakeSince<1.1&&this.trip.riders.some(r=>r.state==='onboard')){this.stats.harshBrakes++;this.penalty(25);this.brakePeak=0;this.brakeJolt=1;this.audio.gasp(true);this.audio.effect('brake');this.notice('高速急煞！乘客不滿',25);}
     this.wasBraking=braking;
-    for(const light of this.signals){const line=light.s-7;if(light.phase==='red'&&!light.violated&&previous.s+3.1<line&&p.s+3.1>=line&&p.distance<12){light.violated=true;this.stats.redLights++;this.penalty(80);this.audio.say('crash',true);this.notice('衝紅燈！留意過路行人',80);}}
+    for(const light of this.signals){const line=light.s-7;if(light.phase==='red'&&!light.violated&&previous.s+3.1<line&&p.s+3.1>=line&&p.distance<12){light.violated=true;this.stats.redLights++;this.penalty(80);this.audio.gasp(true);this.notice('衝紅燈！留意過路行人',80);}}
     while(this.checkIndex<this.checks.length){const c=onRoute(this.checks[this.checkIndex]);if(Math.hypot(this.state.x-c.x,this.state.z-c.z)>22)break;this.checkIndex++;}
     const limit=this.checkIndex<this.checks.length?this.checks[this.checkIndex]+12:TOTAL_LENGTH;
     if(p.distance<20)this.progress=Math.max(this.progress,Math.min(p.s,limit));
     if(Math.abs(this.state.speed)*3.6>80)this.stats.overspeed+=dt;
     this.doorAmount=clamp(this.doorAmount+(this.doorOpen?1:-1)*dt*2,0,1);
-    if(this.doorAmount>.03&&Math.abs(this.state.speed)>=STOP_SPEED&&!this.unsafeDoor){this.stats.doorViolations++;this.unsafeDoor=true;this.audio.say('door',true);this.notice('未關門開車！',40);}
+    if(this.doorAmount>.03&&Math.abs(this.state.speed)>=STOP_SPEED&&!this.unsafeDoor){this.stats.doorViolations++;this.unsafeDoor=true;this.audio.gasp(true);this.notice('未關門開車！',40);}
     if(this.doorAmount===0)this.unsafeDoor=false;
     this.updatePassengers(dt);
     if(this.health<=0)this.finish('小巴損壞，無法繼續');
     this.audio.tick(this.state.speed,input.throttle,input.throttle<0||input.handbrake,this.stats.remaining,true,input.steer);
-    if(Math.hypot(this.state.x,this.state.z)>2000)this.resetVan();
   }
   finish(reason:string){if(this.mode!=='playing')return;this.mode='results';this.autopilot=false;this.ui.hide('countdown');this.ui.hide('toast');this.audio.tick(0,0,false,0,false);this.audio.effect('finish');this.ui.results(this.stats,this.trip.seed,reason,this.demoRun,this.gameMode);if(this.demoRun)this.demoRecorder?.finished();}
   frame(now:number){
@@ -250,15 +269,10 @@ export class Game {
     this.sparks?.update(active?dt:0,this.state,input.steer,input.throttle<0||input.handbrake,active);this.lighting?.update(dt,this.state.x,this.state.z,this.state.heading);this.city.updateVisibility(this.state);
     if(this.van.door){this.van.door.position.z=-2.1+this.doorAmount*1.15;this.van.door.rotation.y=this.doorAmount*.16;}
     if(this.mode==='playing')this.van.wheels.forEach(w=>w.rotation.x-=this.state.speed*dt/.52);
-    for(const [i,v]of this.riderVisuals.entries()){
-      const r=this.trip.riders[i];
-      if(v.moving>0&&this.mode==='playing'){v.moving=Math.max(0,v.moving-dt);v.person.group.position.lerpVectors(v.from,v.to,1-v.moving/.65);animatePerson(v.person,this.time,false,true);if(v.moving===0&&!v.out)v.person.group.visible=false;}
-      else if(r.state==='waiting'){animatePerson(v.person,this.time,true,false);if(v.dodge)this.animateDodge(v);}
-    }
     for(const [i,s]of this.stopModels.entries()){
       const st=this.trip.stops[i],drop=this.trip.riders.some(r=>r.state==='onboard'&&r.dropoff===i),pickup=this.trip.riders.some(r=>r.state==='waiting'&&r.pickup===i);
       s.group.visible=this.mode!=='menu'&&Math.hypot(this.state.x-st.x,this.state.z-st.z)<200;s.zone.visible=(st.terminal||drop||pickup)&&st.s>this.progress-28;
-      const col=st.terminal?'#ffd967':drop?'#71d2ff':'#7defa4';s.mat.color.set(col);(s.fill.material as T.MeshBasicMaterial).color.set(col);(s.fill.material as T.MeshBasicMaterial).opacity=.20+Math.sin(this.time*3)*.055;
+      const col=st.terminal?'#ffd967':drop?'#71d2ff':'#7defa4';updateStopGlow(s,this.time,col);
     }
     if(this.mode==='menu'){
       this.menuTime+=dt;const angle=.72+Math.sin(this.menuTime*.12)*.09;
@@ -273,6 +287,7 @@ export class Game {
       if(!this.cameraReady){this.cameraPos.copy(ideal);this.cameraLook.copy(look);this.cameraReady=true;}else{this.cameraPos.lerp(ideal,1-Math.exp(-dt*7));this.cameraLook.lerp(look,1-Math.exp(-dt*9));}
       this.camera.position.copy(this.cameraPos);this.camera.lookAt(this.cameraLook);const fov=55+Math.min(7,Math.abs(this.state.speed)*.20);if(Math.abs(this.camera.fov-fov)>.05){this.camera.fov=fov;this.camera.updateProjectionMatrix();}
     }
+    this.city.updateOcclusion(dt,this.state,this.camera.position,this.cameraLook,this.mode!=='menu');
     this.sun.position.set(this.state.x-48,65,this.state.z+42);this.sun.target.position.set(this.state.x,0,this.state.z);this.sun.target.updateMatrixWorld();
     this.smoke.visible=this.health<40&&this.mode==='playing';if(this.smoke.visible){for(let i=0;i<12;i++){const age=(this.time*.7+i/12)%1;this.smokeDummy.position.set(this.state.x+Math.sin(i)*age,2.5+age*4,this.state.z+2+age*2);this.smokeDummy.scale.setScalar(.15+age*.7);this.smokeDummy.updateMatrix();this.smoke.setMatrixAt(i,this.smokeDummy.matrix);}this.smoke.instanceMatrix.needsUpdate=true;}
     this.flash=Math.max(0,this.flash-dt*2.8);this.ui.el('damage-flash').style.opacity=String(this.flash*.8);if(this.time>this.toastUntil)this.ui.hide('toast');

@@ -46,16 +46,20 @@ export function streetProp(city:City,p:V2,heading:number,type:number){
 
 function tree(city:City,x:number,z:number,size=1){
   cylinder(city.group,'#655c43',x,2*size,z,.24*size,4*size,9);
+  city.obstacles.push({x,z,hx:.26*size,hz:.26*size,heading:0,kind:'building',label:'樹木',height:4*size});
   const geometry=new T.IcosahedronGeometry(2.15*size,1);
   for(let i=0;i<3;i++){const m=new T.Mesh(geometry,material(['#3d6852','#567753','#396552'][i]));m.position.set(x+Math.sin(i*2)*size,4.4*size+i*.6,z+Math.cos(i*2)*size);m.scale.y=.85;m.castShadow=true;city.group.add(m);}
 }
 
 function park(city:City){
   const x=-63,z=-210;city.add('@grass:#698755',x,.06,z,62,.12,78);
-  city.add('@concrete:#d0c1a3',x,.16,z,6,.12,78);city.add('@concrete:#d0c1a3',x,.16,z,62,.12,5);
+  city.add('@concrete:#d0c1a3',x,.16,z,6,.12,78);for(const side of [-1,1])city.add('@concrete:#d0c1a3',x+side*17,.16,z,28,.12,5);
   for(let i=0;i<12;i++){const xx=x+(i%2?24:-24),zz=z-32+Math.floor(i/2)*12;tree(city,xx,zz,.85+(i%3)*.18);}
-  for(const dx of [-14,14])for(const dz of [-24,24]){city.add('#947957',x+dx,.76,z+dz,3,.16,.58);city.add('#947957',x+dx,1.15,z+dz+.3,3,.6,.1);for(const n of [-1,1])city.add('#43554c',x+dx+n,.43,z+dz,.13,.7,.46);}
-  const pavilion=new T.Group();pavilion.position.set(x,.17,z);for(const dx of [-3,3])for(const dz of [-3,3])cylinder(pavilion,'#ad5944',dx,1.8,dz,.18,3.6);const roof=new T.Mesh(new T.ConeGeometry(5.6,1.7,4),material('#46766b'));roof.position.y=4.3;roof.rotation.y=Math.PI/4;pavilion.add(roof);city.group.add(pavilion);
+  for(const dx of [-14,14])for(const dz of [-24,24]){
+    const bench=at(city,{x:x+dx,z:z+dz},0,g=>{for(let slat=0;slat<4;slat++)box(g,'#947957',0,.60,-.22+slat*.15,3,.12,.12);for(let slat=0;slat<3;slat++)box(g,'#a48860',0,.87+slat*.16,.3,3,.12,.1);for(const n of [-1,1])box(g,'#43554c',n,.27,0,.13,.7,.46);},1.55,.43);
+    city.obstacles.find(o=>o.group===bench)!.label='公園長椅';
+  }
+  const pavilion=new T.Group();pavilion.position.set(x,.17,z);for(const dx of [-3,3])for(const dz of [-3,3])cylinder(pavilion,'#ad5944',dx,1.8,dz,.18,3.6);const roof=new T.Mesh(new T.ConeGeometry(5.6,1.7,4),material('#46766b'));roof.position.y=4.3;roof.rotation.y=Math.PI/4;pavilion.add(roof);city.group.add(pavilion);city.obstacles.push({x,z,hx:3.3,hz:3.3,heading:0,kind:'building',label:'涼亭',height:5.2,group:pavilion});
   const board=sign('榕樹公園','BANYAN GARDEN','#325949','#f4e5b8',4.8,1.0);board.position.set(-30,2.35,z+4);board.rotation.y=Math.PI/2;city.group.add(board);
 }
 function school(city:City){
@@ -78,18 +82,17 @@ function footbridge(city:City,s:number){
   const p=onRoute(s),h=-p.heading;
   const g=new T.Group();g.position.set(p.x,0,p.z);g.rotation.y=h;
   box(g,'@concrete:#d8c29e',0,6.0,0,35,.65,3.8);box(g,'#629590',0,8.8,0,36,.18,4.4);
-  for(const x of [-16,16]){box(g,'#b8b9a9',x,3,0,.7,6,.75);city.obstacles.push({x:p.x+Math.cos(p.heading)*x,z:p.z+Math.sin(p.heading)*x,hx:.45,hz:.45,heading:0,kind:'object'});}
+  for(const x of [-16,16]){box(g,'#b8b9a9',x,3,0,.7,6,.75);city.obstacles.push({x:p.x+Math.cos(p.heading)*x,z:p.z+Math.sin(p.heading)*x,hx:.45,hz:.45,heading:0,kind:'building',height:6,label:'天橋柱'});}
   for(let x=-17;x<=17;x+=1.3)for(const z of [-1.85,1.85]){box(g,'#547a74',x,7.5,z,.07,2.6,.07);box(g,'#a1b6a9',x,6.9,z,.75,.9,.04);}
   for(const z of [-1.85,1.85])box(g,'#63837b',0,7.4,z,35,.07,.07);
   for(const side of [-1,1])for(let i=0;i<22;i++){box(g,'@concrete:#c8bc9f',side*16,3-i*.13,3+i*.52,2,6-i*.26,.53);}
-  city.group.add(g);
+  city.group.add(g);city.registerOccluder(g);
 }
 
 /** Additional streets are genuinely drivable and connect through open junction mouths. */
 export function addDistricts(city:City){
   const rng=random(8522026);
   for(const r of SIDE_ROADS){const dx=r.b.x-r.a.x,dz=r.b.z-r.a.z,len=Math.hypot(dx,dz),heading=Math.atan2(dx,-dz),h=-heading,c=Math.cos(heading),s=Math.sin(heading),x=(r.a.x+r.b.x)/2,z=(r.a.z+r.b.z)/2;
-    city.add('@concrete:#b8b5a2',x,.01,z,29,.2,len+28,h);city.add('@asphalt',x,.106,z,18,.056,len+18,h);
     for(let d=19;d<len-12;d+=14){const px=r.a.x+dx*d/len,pz=r.a.z+dz*d/len;if(ROADS.some(other=>other!==r&&projectRoad({x:px,z:pz},other).distance<13))continue;city.add('#ddd7b9',px,.15,pz,.14,.02,5,h);}
     for(let d=24;d<len-22;d+=30){const px=r.a.x+dx*d/len,pz=r.a.z+dz*d/len;
       for(const side of [-1,1]){const bx=px+c*side*27,bz=pz+s*side*27;
@@ -114,6 +117,6 @@ export function addDistricts(city:City){
   const signs=[['龍鳳酒樓','DRAGON & PHOENIX','#361d32','#ff7d73','neon-noodles'],['金龍押','GOLDEN DRAGON PAWN','#202331','#ffd55d','pawn'],['紅Van茶餐廳','MILK TEA · PINEAPPLE BUN','#183f36','#70ffcd','neon-tea'],['明記電器','MING KEE ELECTRICAL','#243657','#81cfff','neon'],['寶聲唱片','PO SHING RECORDS','#362741','#ff9dde','neon-record']];
   for(let s=72,i=0;s<1370;s+=74,i++){const p=onRoute(s,4.4),h=onRoute(s).heading;if(nearSideRoad(p,22))continue;const d=signs[i%signs.length],height=7.2+(i%3)*1.05,g=new T.Group();g.position.set(p.x,0,p.z);g.rotation.y=-h;
     for(const z of [-.17,.17]){box(g,'#434f4b',-3.8,height+1.5,z,15,.13,.10);box(g,'#434f4b',-7.5,height+2.1,z,.1,1.5,.1);}
-    mountedSign(g,d[0],d[1],d[2],d[3],i%5===1?4.3:8.4,i%5===1?4.0:2.25,0,height,0,d[4]);city.group.add(g);
+    mountedSign(g,d[0],d[1],d[2],d[3],i%5===1?4.3:8.4,i%5===1?4.0:2.25,0,height,0,d[4]);city.group.add(g);city.registerOccluder(g);
   }
 }

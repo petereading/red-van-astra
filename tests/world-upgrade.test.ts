@@ -1,13 +1,12 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
 import * as T from 'three';
 import {ROADS,SIDE_ROADS,nearestRoad,roadPath,navigate} from '../src/roads';
 import {onRoute,random} from '../src/core';
 import {bodyMotion,WheelSparks} from '../src/driving-effects';
 import {setNightMaterials,sign,material} from '../src/visuals';
 import {StreetLighting} from '../src/lighting';
-import {VOICE_ASSETS} from '../src/audio';
+import {surpriseWave} from '../src/surprise-sound';
 import {headlessGame,disposeGame,stepSeconds} from './harness';
 
 test('every branch reconnects via real roads; recovery guidance returns to the next unvisited route section',()=>{
@@ -39,7 +38,8 @@ test('cosmetic suspension stays subtle and stationary boarding stays level; spar
   assert.ok(bodyMotion(28,-1,.12).roll<0);assert.ok(bodyMotion(28,1,.12).roll>0);
   const sparks=new WheelSparks();for(let f=0;f<600;f++)sparks.update(1/60,{x:0,z:0,heading:0,speed:29},1,false,true);assert.equal(sparks.particles.length,96);assert.ok(sparks.mesh.visible);for(let f=0;f<60;f++)sparks.update(1/60,{x:0,z:0,heading:0,speed:0},0,false,false);assert.equal(sparks.mesh.visible,false);
 });
-test('both male and female short voice variants are bundled and valid PCM recordings',()=>{
-  for(const asset of VOICE_ASSETS){const wav=readFileSync(new URL('../public/audio/'+asset+'.wav',import.meta.url));assert.equal(wav.toString('ascii',0,4),'RIFF');assert.equal(wav.toString('ascii',8,12),'WAVE');const duration=wav.readUInt32LE(40)/wav.readUInt32LE(28);assert.ok(duration>.12&&duration<1.2,asset+' must stay short');assert.ok(wav.subarray(44).some(n=>n!==0));}
-  for(const phrase of ['thanks','complaint','wow','gasp'])assert.notDeepEqual(readFileSync(new URL('../public/audio/'+phrase+'-male.wav',import.meta.url)),readFileSync(new URL('../public/audio/'+phrase+'-female.wav',import.meta.url)));
+test('wordless surprise effects have distinct registers, bounded peaks and short non-silent envelopes',()=>{
+  const variants=Array.from({length:4},(_,i)=>surpriseWave(22050,i));
+  for(const wave of variants){assert.ok(wave.length/22050>.4&&wave.length/22050<.8);assert.ok(wave.every(n=>Number.isFinite(n)&&Math.abs(n)<.5));assert.ok(wave.some(n=>Math.abs(n)>.1));assert.ok(wave[0]===0);assert.ok(Math.abs(wave.at(-1)!)<.001);}
+  assert.notDeepEqual(variants[0],variants[1]);assert.notDeepEqual(variants[2],variants[3]);
 });

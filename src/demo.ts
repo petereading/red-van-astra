@@ -36,7 +36,7 @@ export class DemoRecorder {
     if(this.busy)return;
     this.busy=true;const epoch=++this.epoch;
     (this.ui.el('demo-record')as HTMLButtonElement).disabled=true;
-    this.ui.text('demo-error','請在分享視窗選擇目前的《紅Van》分頁。');
+    this.ui.text('demo-error','請在分享視窗選擇目前的《紅Van：極速傳說》分頁。');
     try{
       // Must be called directly from the button's user activation, before awaits.
       const capture=await navigator.mediaDevices.getDisplayMedia({
@@ -48,11 +48,10 @@ export class DemoRecorder {
       const video=capture.getVideoTracks()[0];
       if(!video||video.readyState==='ended')throw new Error('未取得畫面，請重新選擇遊戲分頁。');
       const surface=video.getSettings().displaySurface;
-      if(surface&&surface!=='browser')throw new Error('請選擇《紅Van》瀏覽器分頁，而非整個螢幕或視窗。');
+      if(surface&&surface!=='browser')throw new Error('請選擇《紅Van：極速傳說》瀏覽器分頁，而非整個螢幕或視窗。');
       video.addEventListener('ended',()=>{if(epoch===this.epoch)this.stop('畫面分享已停止；影片保留已錄下的部分。');},{once:true});
       await this.audio.unlock();
       // Voice loading is bounded so an unavailable asset cannot hold the picker open.
-      await Promise.race([this.audio.voicesReady,new Promise(resolve=>setTimeout(resolve,4000))]);
       if(epoch!==this.epoch)return;
       const source=this.audio.recordingSource();this.releaseAudio=source.release;
       const stream=new MediaStream([video,...source.stream.getAudioTracks()]);

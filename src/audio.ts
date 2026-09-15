@@ -1,13 +1,11 @@
 import { clamp } from './core';
-type VoiceKey = 'welcome' | 'dropoff' | 'slow' | 'crash' | 'thanks' | 'door';
-const phrases: Record<VoiceKey,string> = {welcome:'唔該',dropoff:'唔該',slow:'嘩',crash:'搞錯呀',thanks:'唔該',door:'搞錯呀'};
-export const VOICE_ASSETS=['thanks-male','thanks-female','complaint-male','complaint-female','wow-male','wow-female','gasp-male','gasp-female'];
+import { surpriseWave } from './surprise-sound';
 export class GameAudio {
   context?: AudioContext; music?: GainNode; sfx?: GainNode; voice?: GainNode;
-  master?: DynamicsCompressorNode; recording=false; voicesReady:Promise<unknown>=Promise.resolve();
+  master?: DynamicsCompressorNode; recording=false;
   engine?: OscillatorNode; engine2?: OscillatorNode; engineGain?: GainNode;
   noise?: AudioBuffer; step=0; nextBeat=0; playing=false; alarmAt=0; lastVoice=-10;
-  values={music:.42,sfx:.72,voice:.80}; buffers=new Map<string,AudioBuffer>();voiceIndex=0;tyreAt=0;activeVoice?:AudioBufferSourceNode;
+  values={music:.42,sfx:.72,voice:.80}; gasps:AudioBuffer[]=[];voiceIndex=0;tyreAt=0;activeVoice?:AudioBufferSourceNode;
   async unlock() {
     if(!this.context) {
       const Ctor=window.AudioContext || (window as unknown as {webkitAudioContext:typeof AudioContext}).webkitAudioContext;
@@ -20,7 +18,7 @@ export class GameAudio {
       this.engine=c.createOscillator();this.engine.type='sawtooth';this.engine.frequency.value=42;this.engine.connect(this.engineGain);this.engine.start();
       this.engine2=c.createOscillator();this.engine2.type='triangle';this.engine2.frequency.value=84;this.engine2.connect(this.engineGain);this.engine2.start();
       this.noise=c.createBuffer(1,c.sampleRate,c.sampleRate);const n=this.noise.getChannelData(0);for(let i=0;i<n.length;i++)n[i]=Math.random()*2-1;
-      this.voicesReady=Promise.all(VOICE_ASSETS.map(key=>fetch(`/audio/${key}.wav`).then(r=>r.ok?r.arrayBuffer():Promise.reject()).then(b=>c.decodeAudioData(b)).then(b=>this.buffers.set(key,b)).catch(()=>{})));
+      this.gasps=Array.from({length:4},(_,variant)=>{const wave=surpriseWave(c.sampleRate,variant),buffer=c.createBuffer(1,wave.length,c.sampleRate);buffer.copyToChannel(wave,0);return buffer;});
       this.setLevels(this.values);
     }
     await this.context.resume();this.nextBeat=this.context.currentTime+.05;
@@ -40,9 +38,9 @@ export class GameAudio {
     const c=this.context;if(!c)return;const t=c.currentTime;
     this.engineGain?.gain.setTargetAtTime(active?.035+Math.abs(speed)*.0015:0,t,.12);
     this.engine?.frequency.setTargetAtTime(34+Math.abs(speed)*3.7+(throttle>0?12:0),t,.09);this.engine2?.frequency.setTargetAtTime(68+Math.abs(speed)*7.4,t,.09);
-    if(active&&Math.abs(speed)*3.6>80&&t-this.alarmAt>.72){this.tone(1380,t,.13,.12,'square');this.tone(1380,t+.20,.13,.10,'square');this.alarmAt=t;if(Math.abs(speed)>25)this.say('slow');}
+    if(active&&Math.abs(speed)*3.6>80&&t-this.alarmAt>.72){this.tone(1380,t,.13,.12,'square');this.tone(1380,t+.20,.13,.10,'square');this.alarmAt=t;if(Math.abs(speed)>25)this.gasp();}
     const skid=active?Math.max(brake?clamp((Math.abs(speed)-7)/16,0,1):0,clamp((Math.abs(speed)*Math.abs(steer)-7)/15,0,1)):0;
-    if(skid>.08&&t-this.tyreAt>.12){this.tyreAt=t;this.hiss(t,.22,.045*skid,1900);this.tone(640+Math.sin(t*17)*110,t,.2,.025*skid,'sawtooth',this.sfx,1100+skid*480);this.tone(1250+Math.sin(t*9)*140,t,.16,.014*skid,'triangle');if(skid>.9&&Math.abs(speed)>20)this.say('slow');}
+    if(skid>.08&&t-this.tyreAt>.12){this.tyreAt=t;this.hiss(t,.22,.045*skid,1900);this.tone(640+Math.sin(t*17)*110,t,.2,.025*skid,'sawtooth',this.sfx,1100+skid*480);this.tone(1250+Math.sin(t*9)*140,t,.16,.014*skid,'triangle');if(skid>.9&&Math.abs(speed)>20)this.gasp();}
     if(!active){this.nextBeat=t+.04;return;}
     while(this.nextBeat<t+.12){
       const b=this.step%16,bar=Math.floor(this.step/16)%8,root=[55,55,65.406,49,55,55,73.416,49][bar],at=this.nextBeat;
@@ -55,22 +53,22 @@ export class GameAudio {
       this.step++;this.nextBeat+=60/158/4;
     }
   }
-  effect(kind:'coin'|'door'|'hit'|'person'|'count'|'start'|'finish'|'horn'|'brake',intensity=1){const c=this.context;if(!c)return;const t=c.currentTime;
+  effect(kind:'coin'|'bell'|'door'|'hit'|'person'|'count'|'start'|'finish'|'horn'|'brake',intensity=1){const c=this.context;if(!c)return;const t=c.currentTime;
     if(kind==='brake'){this.hiss(t,.4,.19,2400);this.tone(200,t,.25,.08,'sawtooth',this.sfx,70);}
-    if(kind==='coin'){this.tone(1568,t,.12,.15);this.tone(2093,t+.09,.2,.13);}
+    if(kind==='coin'){for(const [i,f]of [1840,2470,3120].entries()){this.tone(f,t+i*.065,.13,.12);this.tone(f*1.47,t+i*.065,.075,.035);this.hiss(t+i*.065,.025,.055,3400);}}
+    if(kind==='bell'){this.tone(1047,t,.52,.16);this.tone(2094,t,.19,.035);this.tone(784,t+.18,.65,.14);this.tone(1568,t+.18,.22,.03);}
     if(kind==='door'){this.hiss(t,.40,.16,700);this.tone(130,t+.28,.10,.11,'triangle',this.sfx,50);}
-    if(kind==='hit'||kind==='person'){this.hiss(t,.22,.24*clamp(intensity,.3,1.5),400);this.tone(85,t,.19,.3,'triangle',this.sfx,25);if(kind==='person')this.say('crash',true);}
+    if(kind==='hit'||kind==='person'){this.hiss(t,.22,.24*clamp(intensity,.3,1.5),400);this.tone(85,t,.19,.3,'triangle',this.sfx,25);if(kind==='person')this.gasp(true);}
     if(kind==='count')this.tone(600,t,.14,.15,'sine');
-    if(kind==='start'){this.tone(1100,t,.34,.13);this.say('welcome');}
+    if(kind==='start'){this.tone(1100,t,.34,.13);}
     if(kind==='finish'){[523,659,784,1047].forEach((f,i)=>this.tone(f,t+i*.14,.5,.13));}
     if(kind==='horn'){this.tone(350,t,.32,.10,'sawtooth');this.tone(440,t,.32,.09,'sawtooth');}
   }
-  say(key:VoiceKey,force=false){const c=this.context;if(!c||(!force&&c.currentTime-this.lastVoice<3.4)||(force&&c.currentTime-this.lastVoice<.5))return;this.lastVoice=c.currentTime;
-    const index=this.voiceIndex++,gender=index%2?'female':'male',phrase=key==='slow'?(Math.floor(index/2)%2?'gasp':'wow'):key==='crash'||key==='door'?'complaint':'thanks';
-    const buffer=this.buffers.get(phrase+'-'+gender);if(buffer){try{this.activeVoice?.stop();}catch{}const s=c.createBufferSource();s.buffer=buffer;s.playbackRate.value=[.97,1.03,1.04,.96][index%4];s.connect(this.voice!);s.start();this.activeVoice=s;return;}
-    if(!this.recording&&'speechSynthesis'in window){const voices=speechSynthesis.getVoices().filter(v=>/zh[-_]HK|yue/i.test(v.lang)),v=voices[index%Math.max(1,voices.length)];if(v){const u=new SpeechSynthesisUtterance(phrases[key]);u.voice=v;u.lang='zh-HK';u.rate=1.16;u.pitch=gender==='female'?1.3:.83;u.volume=this.values.voice;speechSynthesis.cancel();speechSynthesis.speak(u);return;}}
-    // Always provide a vocal-like surprise even if device speech is unavailable.
-    this.tone(370,c.currentTime,.32,.10,'sawtooth',this.voice,740);this.tone(610,c.currentTime+.06,.27,.06,'triangle',this.voice,280);
+  gasp(force=false){
+    const c=this.context;if(!c||!this.voice||!this.gasps.length||c.currentTime-this.lastVoice<(force?.5:3.4))return;
+    this.lastVoice=c.currentTime;const index=this.voiceIndex++;
+    try{this.activeVoice?.stop();}catch{}
+    const source=c.createBufferSource();source.buffer=this.gasps[index%this.gasps.length];source.playbackRate.value=[1,.98,1.04,1.02][index%4];source.connect(this.voice);source.start();this.activeVoice=source;source.onended=()=>source.disconnect();
   }
-  pause(){this.playing=false;if(this.engineGain&&this.context)this.engineGain.gain.setTargetAtTime(0,this.context.currentTime,.05);if('speechSynthesis'in window)speechSynthesis.cancel();this.context?.suspend();}
+  pause(){this.playing=false;if(this.engineGain&&this.context)this.engineGain.gain.setTargetAtTime(0,this.context.currentTime,.05);this.context?.suspend();}
 }

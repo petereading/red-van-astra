@@ -28,8 +28,9 @@
 - **3D 幾何與招牌：** `src/visuals.ts` 及 `src/streetscape.ts` 中的原創程式化模型。招牌使用真實字體排版；所有商店名稱屬遊戲場景設定。
 - **材質及細節更新：** `src/surfaces.ts` 的原創程式化路面、地磚、灰泥及瓷磚貼圖；加入凹凸表面、車漆與玻璃反光、圓潤車身、輪圈、冷氣機及門框。樓宇高度、外牆色、露台、店面、簷篷和 24 種橫向／直向／霓虹風格招牌有不同組合。
 - **音樂：** `src/audio.ts` 中的原創 158 BPM breakbeat 音序，以 Web Audio 即時合成。
-- **引擎／剎車／投幣／碰撞／車門：** 原創 Web Audio 合成音效。
-- **粵語：** 原創短句經 eSpeak NG 生成的 WAV 音檔，生成工具為 `scripts/generate-voices.mjs`。八個男女變化音檔只含「唔該」、「搞錯呀」、「嘩」及驚呼；車軚摩擦聲另外即時合成。eSpeak NG 不隨遊戲執行時分發。語音屬合成聲，並非真人錄音。
+- **引擎／剎車／投幣／落車鐘／碰撞／車門／輪胎：** 原創 Web Audio 合成音效。
+- **無語句驚呼：** `src/surprise-sound.ts` 產生四種原創短促合成音效，混合呼氣噪音、音高變化與共振音色。沒有中文語句，也不是真人錄音。本輪已移除所有 eSpeak NG WAV、生成腳本及瀏覽器語音合成呼叫。
+- **交通燈及停站光效：** `src/glow.ts` 的原創 Canvas 漸層貼圖，使用加色混合；沒有使用 Crazy Taxi 的光效素材。
 - **字體：** Noto Sans TC（SIL Open Font License 1.1），透過 `@fontsource/noto-sans-tc` 打包。授權文字見 `public/fonts/OFL.txt`。
 - **程式依賴：** Three.js（MIT）、Rapier（Apache-2.0）、Vite／TypeScript 與各自依賴遵從其原有授權。
 

@@ -37,7 +37,7 @@ function setup(t:TestContext){
   const media={getDisplayMedia:async(options:unknown)=>{calls.options=options;return capture;}};
   define('navigator',{mediaDevices:media});define('document',{body:{classList:{add(){},remove(){}}}});
   define('MediaRecorder',Recorder);define('MediaStream',Stream);
-  const gameAudio:any={unlock:async()=>{},voicesReady:Promise.resolve(),recordingSource:()=>({stream:new Stream([audio]),release:()=>{calls.releases++;audio.stop();}})};
+  const gameAudio:any={unlock:async()=>{},recordingSource:()=>({stream:new Stream([audio]),release:()=>{calls.releases++;audio.stop();}})};
   const demo=new DemoRecorder(ui,gameAudio,{start:async()=>{calls.starts++;},stop:()=>{calls.stops++;}});
   t.after(()=>{demo.stop('test cleanup');for(const[k,v]of Object.entries(globals)){if(v)Object.defineProperty(globalThis,k,v);else Reflect.deleteProperty(globalThis,k);}});
   return {demo,ui,visible,calls,media,video,audio,capture};

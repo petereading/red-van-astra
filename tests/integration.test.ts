@@ -27,7 +27,7 @@ test('moving away interrupts boarding, overspeed accumulates, and recovery costs
   const remaining=g.stats.remaining;g.resetVan();assert.equal(g.stats.resets,1);assert.ok(Math.abs(g.stats.remaining-(remaining-5))<.001);assert.equal(g.state.speed,0);assert.equal(g.doorOpen,false);disposeGame(g);
 });
 test('waiting passengers dodge without injury, remain available, and repeated contacts do not farm penalties',async()=>{
-  const g=await headlessGame();g.onHit({kind:'person',id:100},15);assert.equal(g.stats.people,1);assert.equal(g.trip.riders[0].state,'waiting');assert.equal(g.health,100);assert.ok(g.riderVisuals[0].dodge);g.time+=.6;g.animateDodge(g.riderVisuals[0]);assert.ok(Math.abs(g.riderVisuals[0].person.group.position.y-.25)<1e-6);assert.ok(Math.abs(g.riderVisuals[0].person.group.rotation.z)<.01);g.time+=2;g.onHit({kind:'person',id:100},15);assert.equal(g.stats.people,1);
+  const g=await headlessGame();g.onHit({kind:'person',id:100},15);assert.equal(g.stats.people,1);assert.equal(g.trip.riders[0].state,'waiting');assert.equal(g.health,100);assert.ok(g.riderVisuals[0].dodge);g.time+=.85;g.animateDodge(g.riderVisuals[0]);assert.ok(Math.abs(g.riderVisuals[0].person.group.position.y-.25)<1e-6);assert.ok(Math.abs(g.riderVisuals[0].person.group.rotation.z)<.01);g.time+=2;g.onHit({kind:'person',id:100},15);assert.equal(g.stats.people,1);
   g.makeTrip(42);assert.equal(g.stats.people,0);assert.equal(g.health,100);assert.equal(g.trip.riders.filter(r=>r.state==='waiting').length,10);assert.equal(g.riderHit.size,0);disposeGame(g);
 });
 test('production demonstration entry completes the countdown and whole timed route with traffic',async()=>{
